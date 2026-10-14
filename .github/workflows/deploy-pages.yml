@@ -1,0 +1,60 @@
+name: Deploy lên GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Lấy mã nguồn
+        uses: actions/checkout@v5
+
+      - name: Cài Node (theo .nvmrc)
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Cài phụ thuộc
+        run: npm ci
+
+      - name: Chạy kiểm thử
+        run: npm test
+
+      - name: Build
+        env:
+          # GitHub Pages phục vụ ở thư mục con: https://<user>.github.io/<repo>/
+          # Nếu repo của bạn là dạng <user>.github.io (user page) thì đổi thành "/"
+          BASE_PATH: /${{ github.event.repository.name }}/
+        run: npm run build
+
+      - name: Cấu hình Pages
+        uses: actions/configure-pages@v5
+
+      - name: Đóng gói dist/
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Phát hành
+        id: deployment
+        uses: actions/deploy-pages@v4
