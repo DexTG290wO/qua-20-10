@@ -5,6 +5,8 @@ import gsap from 'gsap';
 import { audioEngine } from '../../utils/audioEngine';
 import { createFourPointStarGeometry, createPetalGeometry } from './ProceduralFlora';
 import { GiftBow, RibbonBands } from './GiftBow';
+import { SoftShadow } from './SoftShadow';
+import type { ImpactSignal } from './SceneContainer';
 
 interface GiftBox3DProps {
   onLanded?: () => void;
@@ -15,6 +17,8 @@ interface GiftBox3DProps {
   /** Hộp quà trôi nhẹ sang bên để nhường sân khấu cho nhân vật / tấm thiệp. */
   docked?: boolean;
   reducedMotion?: boolean;
+  /** Nhận tín hiệu va chạm để camera rung theo. */
+  impactRef?: React.RefObject<ImpactSignal>;
 }
 
 const TOTAL_CLICKS = 4;
@@ -30,36 +34,42 @@ const MagicBurst: React.FC<{ power: number; reducedMotion?: boolean }> = ({
   const elapsed = useRef(0);
   const meshRefs = useRef<(THREE.Mesh | null)[]>([]);
 
-  const count = reducedMotion ? 12 : power >= TOTAL_CLICKS ? 72 : 16 + power * 6;
+  const isBig = power >= TOTAL_CLICKS;
+  const count = reducedMotion ? 14 : isBig ? 90 : 14 + power * 7;
 
   const petalGeom = useMemo(() => createPetalGeometry(0.24, 0.15, 0.06), []);
   const starGeom = useMemo(() => createFourPointStarGeometry(1, 0.3), []);
 
+  // Hạt bay theo đường xoáy ốc: mỗi hạt có góc, bán kính và vận tốc riêng.
+  // Khi mở hộp, một nửa số hạt vào "sóng 2" trễ hơn để hiệu ứng dày và có nhịp.
   const parts = useMemo(
     () =>
       Array.from({ length: count }).map((_, i) => {
         const isStar = i % 4 === 3;
-        const angle = Math.random() * Math.PI * 2;
-        const speed = 0.6 + Math.random() * (power >= TOTAL_CLICKS ? 3.1 : 1.4);
+        const delay = isBig && i % 2 === 1 ? 0.22 + Math.random() * 0.12 : 0;
         return {
           isStar,
-          vel: new THREE.Vector3(
-            Math.cos(angle) * speed * (0.35 + Math.random() * 0.5),
-            1.6 + Math.random() * (power >= TOTAL_CLICKS ? 3.4 : 1.6),
-            Math.sin(angle) * speed * (0.35 + Math.random() * 0.5)
-          ),
+          delay,
+          angle: Math.random() * Math.PI * 2,
+          radius: 0.05 + Math.random() * 0.08,
+          radialSpeed: (isStar ? 1.25 : 0.6) * (0.7 + Math.random() * 0.9) * (isBig ? 1.55 : 1),
+          angSpeed: (Math.random() > 0.5 ? 1 : -1) * (1.1 + Math.random() * 2.4),
+          y: 0.62 + Math.random() * 0.22,
+          vy: 1.5 + Math.random() * (isBig ? 3.7 : 1.6),
+          gravity: 4.4,
           spin: new THREE.Vector3(
             (Math.random() - 0.5) * 7,
             (Math.random() - 0.5) * 7,
             (Math.random() - 0.5) * 7
           ),
-          scale: (isStar ? 0.1 : 0.65) * (0.7 + Math.random() * 0.7),
+          twinkle: 2.5 + Math.random() * 3,
+          scale: (isStar ? 0.11 : 0.6) * (0.7 + Math.random() * 0.7),
           color: isStar
             ? ['#FFF3C4', '#FFE082', '#FFFDE7', '#FFD1DC'][i % 4]
             : ['#FFC1CC', '#FFAAA6', '#FFF0F5', '#FFE0E9', '#FFD7B5'][i % 5],
         };
       }),
-    [count, power]
+    [count, isBig]
   );
 
   useFrame((_, delta) => {
@@ -71,22 +81,33 @@ const MagicBurst: React.FC<{ power: number; reducedMotion?: boolean }> = ({
     meshRefs.current.forEach((mesh, i) => {
       const p = parts[i];
       if (!mesh) return;
-      mesh.position.x += p.vel.x * delta;
-      mesh.position.z += p.vel.z * delta;
-      mesh.position.y += p.vel.y * delta;
-      p.vel.y -= 4.6 * delta;
-      p.vel.multiplyScalar(1 - 1.1 * delta);
 
+      const local = t - p.delay;
+      if (local <= 0) {
+        mesh.visible = false;
+        return;
+      }
+
+      // Bay xoáy ốc: bán kính tăng dần, góc quay chậm lại khi ra xa
+      p.radius += p.radialSpeed * delta;
+      p.angle += p.angSpeed * delta * (1 - Math.min(0.85, p.radius / 3.2));
+      p.vy -= p.gravity * delta;
+      p.y += p.vy * delta;
+
+      mesh.visible = true;
+      mesh.position.set(Math.cos(p.angle) * p.radius, p.y, Math.sin(p.angle) * p.radius);
       mesh.rotation.x += p.spin.x * delta;
       mesh.rotation.y += p.spin.y * delta;
       mesh.rotation.z += p.spin.z * delta;
 
-      const life = 1 - Math.max(0, (t - 1.1) / 1.6);
-      mesh.scale.setScalar(p.scale * Math.max(0.001, life));
+      // Tan dần rồi mất hẳn; sao thì nhấp nháy
+      const life = 1 - Math.max(0, (local - 1.0) / 1.6);
+      const twinkle = p.isStar ? 0.75 + Math.sin(local * p.twinkle + i) * 0.35 : 1;
+      mesh.scale.setScalar(Math.max(0.001, p.scale * life * twinkle));
     });
 
     // Ẩn nhóm sau khi hạt tàn để tiết kiệm draw call
-    if (t > 2.8) group.visible = false;
+    if (t > 3.4) group.visible = false;
   });
 
   return (
@@ -116,6 +137,72 @@ const MagicBurst: React.FC<{ power: number; reducedMotion?: boolean }> = ({
 };
 
 // ─────────────────────────────────────────────────────────────
+//  Sao lấp lánh bay lên liên tục từ miệng hộp sau khi đã mở
+// ─────────────────────────────────────────────────────────────
+const BoxSparkles: React.FC<{ reducedMotion?: boolean }> = ({ reducedMotion = false }) => {
+  const groupRef = useRef<THREE.Group>(null);
+  const starGeom = useMemo(() => createFourPointStarGeometry(1, 0.3), []);
+
+  const items = useMemo(() => {
+    const total = reducedMotion ? 6 : 14;
+    return Array.from({ length: total }).map((_, i) => ({
+      angle: Math.random() * Math.PI * 2,
+      radius: 0.12 + Math.random() * 0.42,
+      speed: 0.5 + Math.random() * 0.45,
+      rise: 0.85 + Math.random() * 1.05,
+      size: 0.055 + Math.random() * 0.07,
+      phase: (i / total) * 3.2,
+      color: ['#FFF3C4', '#FFE082', '#FFFFFF', '#FFD1DC'][i % 4],
+    }));
+  }, [reducedMotion]);
+
+  useFrame((state) => {
+    const t = state.clock.getElapsedTime();
+    const group = groupRef.current;
+    if (!group) return;
+
+    group.children.forEach((child, i) => {
+      const it = items[i];
+      if (!it) return;
+      const local = (t * it.speed + it.phase) % 3.2;
+      const fadeIn = Math.min(1, local / 0.45);
+      const fadeOut = local > 2.2 ? Math.max(0, 1 - (local - 2.2) / 1.0) : 1;
+      const life = fadeIn * fadeOut;
+
+      const a = it.angle + local * 0.85;
+      child.position.set(
+        Math.cos(a) * it.radius,
+        0.86 + local * it.rise * 0.55,
+        Math.sin(a) * it.radius
+      );
+      child.rotation.y = a * 1.4;
+      child.rotation.z = Math.sin(t + i) * 0.5;
+      child.scale.setScalar(
+        it.size * life * (0.85 + Math.sin(t * 3 + i) * 0.2)
+      );
+    });
+  });
+
+  return (
+    <group ref={groupRef}>
+      {items.map((it, i) => (
+        <mesh key={i} geometry={starGeom} scale={it.size}>
+          <meshStandardMaterial
+            color={it.color}
+            emissive={it.color}
+            emissiveIntensity={1.15}
+            transparent
+            opacity={0.92}
+            depthWrite={false}
+            side={THREE.DoubleSide}
+          />
+        </mesh>
+      ))}
+    </group>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────
 export const GiftBox3D: React.FC<GiftBox3DProps> = ({
   onLanded,
   onBoxClick,
@@ -123,6 +210,7 @@ export const GiftBox3D: React.FC<GiftBox3DProps> = ({
   disabled = false,
   docked = false,
   reducedMotion = false,
+  impactRef,
 }) => {
   const dockRef = useRef<THREE.Group>(null);
   const fallRef = useRef<THREE.Group>(null);
@@ -135,6 +223,12 @@ export const GiftBox3D: React.FC<GiftBox3DProps> = ({
   const beamRef = useRef<THREE.Mesh>(null);
   const shadowRef = useRef<THREE.Mesh>(null);
   const coreLightRef = useRef<THREE.PointLight>(null);
+  const magicCircleRef = useRef<THREE.Group>(null);
+
+  // Va chạm chờ phát ra ở frame kế tiếp (để dùng chung đồng hồ với camera)
+  const pendingImpact = useRef(0);
+  const magicLevel = useRef(0);
+  const [isOpened, setIsOpened] = useState(false);
 
   const phaseRef = useRef<'falling' | 'idle' | 'opening' | 'opened'>('falling');
   const clicksRef = useRef(0);
@@ -202,6 +296,7 @@ export const GiftBox3D: React.FC<GiftBox3DProps> = ({
       () => {
         audioEngine.playBoxDrop();
         setBurst({ power: 1, key: Date.now() });
+        pendingImpact.current = 0.6;
       },
       undefined,
       0.52
@@ -246,6 +341,7 @@ export const GiftBox3D: React.FC<GiftBox3DProps> = ({
 
     busyRef.current = true;
     const intensity = 0.6 + n * 0.5;
+    pendingImpact.current = 0.2 + n * 0.12;
 
     // Timeline chính: ngắn gọn (~0.4s) để người dùng có thể nhấp tiếp tự nhiên
     const tl = track(gsap.timeline({ onComplete: () => (busyRef.current = false) }));
@@ -307,6 +403,7 @@ export const GiftBox3D: React.FC<GiftBox3DProps> = ({
 
     phaseRef.current = 'opening';
     audioEngine.playBoxOpen();
+    pendingImpact.current = 1.35;
     setBurst({ power: TOTAL_CLICKS, key: Date.now() });
 
     const tl = track(
@@ -314,6 +411,7 @@ export const GiftBox3D: React.FC<GiftBox3DProps> = ({
         onComplete: () => {
           phaseRef.current = 'opened';
           openedRef.current = true;
+          setIsOpened(true);
           onOpened?.();
         },
       })
@@ -384,8 +482,36 @@ export const GiftBox3D: React.FC<GiftBox3DProps> = ({
   };
 
   // ── 5. Chuyển động phụ khi đứng yên (thở, nơ, nắp) ─────────
-  useFrame((state) => {
+  useFrame((state, delta) => {
     const t = state.clock.getElapsedTime();
+
+    // Phát tín hiệu va chạm cho camera (dùng chung đồng hồ với useFrame này)
+    if (pendingImpact.current > 0 && impactRef?.current) {
+      impactRef.current.time = t;
+      impactRef.current.power = pendingImpact.current;
+      pendingImpact.current = 0;
+    }
+
+    // Vòng tròn ma thuật trên cỏ: hiện dần khi hộp đã mở, xoay chậm
+    if (magicCircleRef.current) {
+      const target = phaseRef.current === 'opened' ? 1 : 0;
+      magicLevel.current += (target - magicLevel.current) * Math.min(1, delta * 1.5);
+      const rings = magicCircleRef.current.children as THREE.Mesh[];
+      if (rings[0]) {
+        (
+          rings[0].material as THREE.MeshBasicMaterial
+        ).opacity = 0.32 * magicLevel.current;
+        rings[0].rotation.z = t * 0.5;
+        rings[0].scale.setScalar(1 + Math.sin(t * 1.8) * 0.03);
+      }
+      if (rings[1]) {
+        (
+          rings[1].material as THREE.MeshBasicMaterial
+        ).opacity = 0.2 * magicLevel.current;
+        rings[1].rotation.z = -t * 0.33;
+        rings[1].scale.setScalar(1 + Math.sin(t * 1.8 + 1.2) * 0.04);
+      }
+    }
 
     if (floatRef.current && phaseRef.current === 'idle' && !busyRef.current) {
       floatRef.current.position.y = Math.sin(t * 2.1) * 0.028;
@@ -410,17 +536,42 @@ export const GiftBox3D: React.FC<GiftBox3DProps> = ({
 
   return (
     <group ref={dockRef}>
-      {/* Bóng tiếp xúc trên thảm cỏ */}
-      <mesh ref={shadowRef} position={[0, 0.012, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-        <circleGeometry args={[0.92, 32]} />
-        <meshBasicMaterial color="#3E5B44" transparent opacity={0.22} />
-      </mesh>
+      {/* Bóng mềm trên thảm cỏ (nhóm này được animate khi hộp quà rơi xuống) */}
+      <group ref={shadowRef}>
+        <SoftShadow radius={1.28} opacity={0.34} position={[0, 0.014, 0]} />
+      </group>
 
       {/* Sóng sáng khi chạm đất / khi mở hộp */}
       <mesh ref={ringRef} position={[0, 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]} scale={0.5}>
         <ringGeometry args={[0.86, 1.02, 48]} />
         <meshBasicMaterial color="#FFE3EC" transparent opacity={0} side={THREE.DoubleSide} />
       </mesh>
+
+      {/* Vòng tròn ma thuật trên cỏ — hiện dần khi hộp đã mở */}
+      <group ref={magicCircleRef} position={[0, 0.03, 0]}>
+        <mesh rotation={[-Math.PI / 2, 0, 0]}>
+          <ringGeometry args={[1.12, 1.3, 64, 1, 0, Math.PI * 1.6]} />
+          <meshBasicMaterial
+            color="#FFE9A8"
+            transparent
+            opacity={0}
+            side={THREE.DoubleSide}
+            blending={THREE.AdditiveBlending}
+            depthWrite={false}
+          />
+        </mesh>
+        <mesh rotation={[-Math.PI / 2, 0, 0]}>
+          <ringGeometry args={[1.45, 1.53, 64, 1, Math.PI * 0.4, Math.PI * 1.2]} />
+          <meshBasicMaterial
+            color="#FFC9E2"
+            transparent
+            opacity={0}
+            side={THREE.DoubleSide}
+            blending={THREE.AdditiveBlending}
+            depthWrite={false}
+          />
+        </mesh>
+      </group>
 
       {/* Nhóm bị ảnh hưởng bởi cú rơi */}
       <group ref={fallRef} position={[0, 17, 0]}>
@@ -483,8 +634,11 @@ export const GiftBox3D: React.FC<GiftBox3DProps> = ({
             </group>
           </group>
 
-          {/* Hạt hoa & sao bay ra */}
+          {/* Hạt hoa & sao bay ra khi nhấp / mở hộp */}
           {burst && <MagicBurst key={burst.key} power={burst.power} reducedMotion={reducedMotion} />}
+
+          {/* Sao lấp lánh bay lên liên tục sau khi hộp đã mở */}
+          {isOpened && <BoxSparkles reducedMotion={reducedMotion} />}
         </group>
       </group>
     </group>

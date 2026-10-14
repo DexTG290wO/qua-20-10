@@ -233,6 +233,17 @@ khi vòng quay bắt đầu, nên kết quả hiển thị luôn khớp với k�
   Bấm nút "Đọc thiệp" hoặc chạm vào thiệp để chuyển sang **khung đọc mở rộng**:
   camera đưa thẳng góc về thiệp, bìa mở ra quanh gáy thật, chữ hiện dần và luôn
   nằm trong khung hình ở mọi tỉ lệ màn hình (`src/utils/layout.ts`).
+- **Trên điện thoại** (`src/utils/layout.ts` → `getCardReadLayout`): chỉ hiển thị
+  **một trang thư** cho chữ to, camera canh đúng tâm trang (không lệch sang phải),
+  bìa gấp hẳn ra sau, và phần dưới màn hình được chừa sẵn chỗ cho thanh công cụ
+  (`CARD_READ_INSETS`) nên nút bấm không bao giờ che chữ. Trên màn rộng thì vẫn
+  xem cả hai trang như một tấm thiệp mở.
+- **Ánh sáng & bóng đổ.** Đèn viền phía sau giúp nhân vật/hộp quà tách khỏi nền,
+  bóng đổ dùng gradient mềm (`SoftShadow`) thay cho vòng cứng, nhân vật có nhịp
+  "thở" nhẹ sau khi xuất hiện.
+- **Hiệu ứng mở hộp quà.** Hạt bay theo **đường xoáy ốc hai lớp** (lớp sau trễ hơn),
+  vòng tròn ma thuật xoay chậm trên cỏ khi hộp đã mở, sao lấp lánh bay lên liên tục,
+  và camera **rung theo lực va chạm** khi hộp rơi, khi nhấp và khi nắp bật mở.
 - **Ưu tiên độ dễ đọc.** Mặt giấy có chữ dùng vật liệu *không nhận sáng*
   (`meshBasicMaterial` + `toneMapped={false}`) nên không bao giờ bị cháy sáng;
   chữ nâu đậm/đỏ rượu trên nền kem đục, tự động chọn cỡ chữ lớn nhất vừa trang

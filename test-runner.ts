@@ -22,16 +22,15 @@ import {
 import {
   CARD_PANEL,
   CARD_EXPANDED_VIEW,
-  CARD_VIEW_MARGIN,
   checkCardFits,
+  checkCardReadFits,
   getCardReadCamera,
   getCardReadDistance,
+  getCardReadLayout,
   getCompactCardView,
   getCardStageCamera,
-  getExpandedCardExtent,
   getCharacterPosition,
   isSpreadView,
-  CAMERA_FOV_DEG,
 } from './src/utils/layout.ts';
 import {
   createPetalGeometry,
@@ -463,19 +462,12 @@ check(
 // ── 17. Bố cục thiệp theo tỉ lệ màn hình ───────────────────
 console.log('\n--- Test 17: Thiệp nằm gọn trong khung hình ---');
 const aspectList = [0.45, 0.6, 0.75, 0.9, 1.0, 1.25, 1.4, 1.6, 1.78, 2.1, 2.4];
-const tanHalfFov = Math.tan((CAMERA_FOV_DEG * Math.PI) / 180 / 2);
 for (const aspect of aspectList) {
-  const extent = getExpandedCardExtent(aspect);
-  const camera = getCardReadCamera(aspect);
-  const halfHeight = camera.distance * tanHalfFov;
-  const halfWidth = halfHeight * aspect;
-  const needWidth = extent.width / 2 + CARD_VIEW_MARGIN.x;
-  const needHeight = extent.height / 2 + CARD_VIEW_MARGIN.y;
-  const fits = halfHeight + 1e-6 >= needHeight && halfWidth + 1e-6 >= needWidth;
+  const fit = checkCardReadFits(aspect);
   check(
-    `aspect ${aspect} — ${extent.spread ? '2 trang' : '1 trang'} nằm gọn`,
-    fits,
-    `cần ${needWidth.toFixed(2)}×${needHeight.toFixed(2)}, có ${halfWidth.toFixed(2)}×${halfHeight.toFixed(2)}`
+    `aspect ${aspect}: thiệp đọc nằm gọn vùng hiển thị`,
+    fit.fits,
+    `trên ${(fit.screenTop * 100).toFixed(1)}%, dưới ${(fit.screenBottom * 100).toFixed(1)}% (cho phép ${(fit.usable.top * 100).toFixed(0)}–${(fit.usable.bottom * 100).toFixed(0)}%)`
   );
 }
 check('Màn hình rộng xem cả hai trang', isSpreadView(1.6) && isSpreadView(1.25));
@@ -486,6 +478,46 @@ check(
     Math.abs(getCardReadCamera(1.6).position[2] - CARD_EXPANDED_VIEW.position[2]) > 2
 );
 check('Khoảng cách đọc tối thiểu hợp lý', getCardReadDistance(1.78) >= 2.7, `${getCardReadDistance(1.78).toFixed(2)}`);
+
+// ── Điểm sửa cho điện thoại: canh đúng trang thư + chừa chỗ thanh công cụ ──
+console.log('--- Test 17c: Thiệp trên điện thoại ---');
+const mobileLayout = getCardReadLayout(0.45);
+const tabletLayout = getCardReadLayout(1.0);
+const desktopLayout = getCardReadLayout(1.78);
+const letterPageWidth = CARD_PANEL.width * CARD_EXPANDED_VIEW.scale;
+
+check(
+  'Điện thoại chỉ hiển thị đúng 1 trang (trang thư)',
+  !mobileLayout.spread && Math.abs(mobileLayout.contentWidth - letterPageWidth) < 1e-9,
+  `rộng ${mobileLayout.contentWidth.toFixed(2)}`
+);
+check(
+  'Điện thoại: camera nhìn đúng TÂM trang thư (không bị lệch sang phải)',
+  Math.abs(mobileLayout.camera.lookAt[0] - letterPageWidth / 2) < 1e-9,
+  `lookAt.x=${mobileLayout.camera.lookAt[0].toFixed(3)} (tâm trang ${(letterPageWidth / 2).toFixed(3)})`
+);
+check(
+  'Điện thoại: bìa gấp hẳn ra sau cho gọn khung',
+  Math.abs(mobileLayout.coverOpenAngle + Math.PI) < 1e-9
+);
+check(
+  'Thiệp được đẩy lên trên để chừa chỗ thanh công cụ',
+  mobileLayout.usableOffsetY < 0,
+  `lệch ${mobileLayout.usableOffsetY.toFixed(2)} world units`
+);
+check(
+  'Tablet (1 trang) cũng canh đúng tâm trang thư',
+  Math.abs(tabletLayout.camera.lookAt[0] - letterPageWidth / 2) < 1e-9
+);
+check(
+  'Desktop: xem 2 trang & canh giữa gáy thiệp',
+  desktopLayout.spread && Math.abs(desktopLayout.camera.lookAt[0]) < 1e-9
+);
+check(
+  'Trang thư trên điện thoại chiếm phần lớn bề ngang màn hình',
+  checkCardReadFits(0.45).screenHalfWidthFraction * 2 > 0.7,
+  `${(checkCardReadFits(0.45).screenHalfWidthFraction * 200).toFixed(0)}% bề ngang`
+);
 
 const compactChar = getCharacterPosition('letter_reading', false);
 const expandedChar = getCharacterPosition('letter_reading', true);
@@ -525,17 +557,11 @@ for (const aspect of aspectList) {
     `cần ${(compactFit.lateralOffset + compactFit.cardHalfWidth).toFixed(2)} ≤ ${compactFit.visibleHalfWidth.toFixed(2)} ngang, cao ${compactFit.cardHalfHeight.toFixed(2)} ≤ ${compactFit.visibleHalfHeight.toFixed(2)}`
   );
 
-  const readCam = getCardReadCamera(aspect);
-  const expandedFit = checkCardFits({
-    view: CARD_EXPANDED_VIEW,
-    camera: { position: readCam.position, lookAt: readCam.lookAt },
-    aspect,
-    spread: isSpreadView(aspect),
-  });
+  const readFit = checkCardReadFits(aspect);
   check(
-    `aspect ${aspect}: thiệp mở rộng nằm trọn khung`,
-    expandedFit.fits,
-    `ngang ${(expandedFit.cardHalfWidth).toFixed(2)} ≤ ${expandedFit.visibleHalfWidth.toFixed(2)}, cao ${expandedFit.cardHalfHeight.toFixed(2)} ≤ ${expandedFit.visibleHalfHeight.toFixed(2)}`
+    `aspect ${aspect}: thiệp mở rộng nằm trọn vùng hiển thị`,
+    readFit.fits,
+    `ngang tới ${(readFit.screenRight * 100).toFixed(1)}%, dọc ${(readFit.screenBottom * 100).toFixed(1)}%`
   );
 }
 

@@ -10,10 +10,17 @@ import type { CardTextData } from '../../utils/cardRenderer';
 import { getCardReadCamera, getCardStageCamera, getCharacterPosition, getCharacterScale, getSceneCamera } from '../../utils/layout';
 import { GiftBox3D } from './GiftBox3D';
 import { CharacterRenderer } from './characters/CharacterRenderer';
+import { SoftShadow } from './SoftShadow';
 import { FloatingParticles } from './FloatingParticles';
 import { Fireworks3D } from './Fireworks3D';
 import { FlowerGarden3D } from './FlowerGarden3D';
 import { GreetingCard3D, type CardMode } from './GreetingCard3D';
+
+/** Tín hiệu va chạm để camera rung theo (hộp quà rơi / mở nắp). */
+export interface ImpactSignal {
+  time: number;
+  power: number;
+}
 
 interface SceneContainerProps {
   phase: GamePhase;
@@ -44,14 +51,30 @@ const RewardReveal: React.FC<{
   const ringRef = React.useRef<THREE.Mesh>(null);
   const pillarRef = React.useRef<THREE.Mesh>(null);
   const lightRef = React.useRef<THREE.PointLight>(null);
+  const readyRef = React.useRef(false);
   const config = RARITY_CONFIGS[rarity];
   const isGrand = rarity === 'epic' || rarity === 'secret';
+
+  // Nhịp "thở" nhẹ sau khi xuất hiện xong — giúp nhân vật sống động hơn
+  useFrame((state) => {
+    const g = groupRef.current;
+    if (!g || !readyRef.current || reducedMotion) return;
+    const t = state.clock.getElapsedTime();
+    const breathe = Math.sin(t * 2.1) * 0.022;
+    g.scale.set(1 - breathe * 0.5, 1 + breathe, 1 - breathe * 0.5);
+    g.rotation.y = Math.sin(t * 0.6) * 0.05;
+  });
 
   // Hiệu ứng xuất hiện (chỉ chạy khi nhân vật mới được trao)
   React.useEffect(() => {
     const g = groupRef.current;
-    if (!g || reducedMotion) return;
-    const tl = gsap.timeline();
+    if (!g) return;
+    if (reducedMotion) {
+      readyRef.current = true;
+      return;
+    }
+    readyRef.current = false;
+    const tl = gsap.timeline({ onComplete: () => (readyRef.current = true) });
     tl.fromTo(g.scale, { x: 0.2, y: 0.2, z: 0.2 }, { x: 1, y: 1, z: 1, duration: 1.15, ease: 'elastic.out(1, 0.55)' });
     tl.fromTo(g.rotation, { y: -1.6 }, { y: 0, duration: 1.0, ease: 'power3.out' }, 0);
     tl.fromTo(g.position, { y: -1.1 }, { y: position[1], duration: 0.95, ease: 'back.out(1.5)' }, 0);
@@ -97,6 +120,8 @@ const RewardReveal: React.FC<{
   return (
     <group ref={groupRef} position={position}>
       <pointLight ref={lightRef} position={[0, 1.4, 1.2]} color={config.color} intensity={isGrand ? 6 : 2.5} distance={9} />
+      {/* Bóng mềm giúp nhân vật "đứng" trên cỏ thay vì lơ lửng */}
+      <SoftShadow radius={1.15} opacity={0.32} position={[0, 0.006, 0]} />
       <mesh ref={ringRef} position={[0, 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]} scale={1}>
         <ringGeometry args={[0.85, 1.15, 44]} />
         <meshBasicMaterial color={config.color} transparent opacity={0.5} side={THREE.DoubleSide} />
@@ -119,13 +144,28 @@ const RewardReveal: React.FC<{
   );
 };
 
-const CameraRig: React.FC<{ phase: GamePhase; cardMode: CardMode }> = ({ phase, cardMode }) => {
+/** Camera nhìn theo giai đoạn + rung nhẹ khi hộp quà rơi/mở (cảm giác va chạm). */
+const CameraRig: React.FC<{
+  phase: GamePhase;
+  cardMode: CardMode;
+  impactRef: React.RefObject<ImpactSignal>;
+}> = ({ phase, cardMode, impactRef }) => {
   const { size } = useThree();
   const target = React.useMemo(() => new THREE.Vector3(), []);
   const look = React.useMemo(() => new THREE.Vector3(), []);
+  const basePos = React.useRef(new THREE.Vector3());
+  const initialized = React.useRef(false);
 
   useFrame((state) => {
     const aspect = size.width / Math.max(1, size.height);
+    const camera = state.camera;
+
+    if (!initialized.current) {
+      basePos.current.copy(camera.position);
+      initialized.current = true;
+    }
+
+    let smoothing = 0.045;
 
     // Chế độ ĐỌC THIỆP: camera đưa thẳng góc về tấm thiệp, khoảng cách
     // được tính để toàn bộ thiệp luôn nằm trong khung hình (mọi tỉ lệ màn hình)
@@ -133,17 +173,35 @@ const CameraRig: React.FC<{ phase: GamePhase; cardMode: CardMode }> = ({ phase, 
       const view = getCardReadCamera(aspect);
       target.set(view.position[0], view.position[1], view.position[2]);
       look.set(view.lookAt[0], view.lookAt[1], view.lookAt[2]);
-      state.camera.position.lerp(target, 0.075);
-      state.camera.lookAt(look);
-      return;
+      smoothing = 0.075;
+    } else {
+      const scene =
+        phase === 'letter_reading' ? getCardStageCamera(aspect) : getSceneCamera(phase, aspect);
+      target.set(scene.position[0], scene.position[1], scene.position[2]);
+      look.set(scene.lookAt[0], scene.lookAt[1], scene.lookAt[2]);
     }
 
-    const scene =
-      phase === 'letter_reading' ? getCardStageCamera(aspect) : getSceneCamera(phase, aspect);
-    target.set(scene.position[0], scene.position[1], scene.position[2]);
-    look.set(scene.lookAt[0], scene.lookAt[1], scene.lookAt[2]);
-    state.camera.position.lerp(target, 0.045);
-    state.camera.lookAt(look);
+    basePos.current.lerp(target, smoothing);
+    camera.position.copy(basePos.current);
+
+    // Rung camera theo tín hiệu va chạm (tắt dần trong ~0.6s)
+    const impact = impactRef.current;
+    let roll = 0;
+    if (impact && impact.time >= 0) {
+      const elapsed = state.clock.getElapsedTime() - impact.time;
+      if (elapsed >= 0 && elapsed < 0.6) {
+        const decay = 1 - elapsed / 0.6;
+        const amp = impact.power * 0.075 * decay * decay;
+        const f = elapsed * 46;
+        camera.position.x += Math.sin(f * 1.7) * amp;
+        camera.position.y += Math.sin(f * 2.3) * amp * 0.75;
+        camera.position.z += Math.sin(f * 3.1) * amp * 0.4;
+        roll = Math.sin(f * 1.3) * amp * 0.28;
+      }
+    }
+
+    camera.lookAt(look);
+    if (roll !== 0) camera.rotation.z += roll;
   });
 
   return null;
@@ -174,6 +232,9 @@ export const SceneContainer: React.FC<SceneContainerProps> = ({
   const characterPosition = getCharacterPosition(phase, cardMode === 'expanded');
   const characterScale = getCharacterScale(phase, cardMode === 'expanded');
 
+  // Tín hiệu va chạm dùng chung giữa hộp quà và camera (cùng một đồng hồ R3F)
+  const impactRef = React.useRef<ImpactSignal>({ time: -1, power: 0 });
+
   // Hộp quà trôi sang một bên để nhường sân khấu cho nhân vật / tấm thiệp
   const docked =
     phase === 'roulette' ||
@@ -195,17 +256,17 @@ export const SceneContainer: React.FC<SceneContainerProps> = ({
           gl.toneMappingExposure = 1.12;
         }}
       >
-        <CameraRig phase={phase} cardMode={cardMode} />
+        <CameraRig phase={phase} cardMode={cardMode} impactRef={impactRef} />
 
         {/* Sương mù tạo chiều sâu cho khu vườn */}
-        <fog attach="fog" args={['#FFE7F0', 10, 26]} />
+        <fog attach="fog" args={['#FFE7F0', 11, 27]} />
 
-        {/* Ánh sáng studio mềm mại */}
-        <hemisphereLight intensity={0.6} color="#FFF3F8" groundColor="#C4E8C8" />
-        <ambientLight intensity={0.42} color="#FFF0F5" />
+        {/* Ánh sáng studio mềm mại + đèn viền cho khối 3D nổi hơn */}
+        <hemisphereLight intensity={0.55} color="#FFF3F8" groundColor="#C4E8C8" />
+        <ambientLight intensity={0.34} color="#FFF0F5" />
         <directionalLight
           position={[5.5, 9, 5]}
-          intensity={1.75}
+          intensity={1.85}
           color="#FFF8E7"
           castShadow
           shadow-mapSize-width={2048}
@@ -216,8 +277,10 @@ export const SceneContainer: React.FC<SceneContainerProps> = ({
           shadow-camera-bottom={-8}
           shadow-bias={-0.0006}
         />
-        <directionalLight position={[-6, 5, -4]} intensity={0.6} color="#E9D4F5" />
-        <pointLight position={[0, 1.4, 4]} intensity={0.35} color="#FFD9E4" />
+        <directionalLight position={[-6, 5, -4]} intensity={0.55} color="#E9D4F5" />
+        {/* Đèn viền phía sau: tách nhân vật khỏi nền, viền hồng nhẹ */}
+        <directionalLight position={[0.5, 4.2, -7.5]} intensity={0.85} color="#FFD9E8" />
+        <pointLight position={[0, 1.4, 4]} intensity={0.3} color="#FFD9E4" />
 
         {/* Khu vườn hoa */}
         <FlowerGarden3D isOpening={docked} reducedMotion={reducedMotion} />
@@ -240,6 +303,7 @@ export const SceneContainer: React.FC<SceneContainerProps> = ({
           disabled={phase !== 'box_idle'}
           docked={docked}
           reducedMotion={reducedMotion}
+          impactRef={impactRef}
         />
 
         {/* Nhân vật trúng thưởng — đứng cạnh thiệp, không che chữ */}

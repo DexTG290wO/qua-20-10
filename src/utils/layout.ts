@@ -2,9 +2,10 @@
  * ─────────────────────────────────────────────────────────────
  *  Bố cục & khung nhìn cho tấm thiệp 3D.
  *
- *  Tách riêng thành hàm thuần (pure) để có thể kiểm thử: "thiệp có
- *  nằm gọn trong khung hình ở mọi tỉ lệ màn hình hay không".
- *  Component `SceneContainer` chỉ việc dùng lại các giá trị này.
+ *  Tách riêng thành hàm thuần (pure) để có thể kiểm thử:
+ *   - thiệp có nằm gọn trong khung hình ở mọi tỉ lệ màn hình;
+ *   - trên điện thoại, trang thư phải nằm giữa vùng nhìn thấy
+ *     và không bị thanh công cụ che mất.
  * ─────────────────────────────────────────────────────────────
  */
 
@@ -19,6 +20,12 @@ export const CAMERA_FOV_DEG = 45;
 
 /** Khoảng trống tối thiểu quanh thiệp để không bị cắt mép. */
 export const CARD_VIEW_MARGIN = { x: 0.18, y: 0.16 };
+
+/**
+ * Vùng chiều cao màn hình dành cho thiệp khi mở rộng (tỉ lệ 0 → 1 từ trên xuống).
+ * Phần dưới chừa chỗ cho thanh công cụ + dòng gợi ý, phần trên chừa lề.
+ */
+export const CARD_READ_INSETS = { top: 0.05, bottom: 0.15 };
 
 /** Vị trí/độ nghiêng của thiệp khi đặt cạnh nhân vật (chế độ thu gọn). */
 export const CARD_COMPACT_VIEW = {
@@ -55,11 +62,10 @@ export function getCompactCardView(aspect: number): CardView {
   return { position: [-1.42, 1.12, 0.9], rotationY: 0.38, scale: 0.95 };
 }
 
-/**
- * Camera khi thiệp đang ở chế độ thu gọn.
- * Màn hình hẹp được lùi camera mượt mà (không nhảy bậc) để khung hình
- * luôn đủ rộng cho tấm thiệp.
- */
+/** Giá trị mặc định cho lần render đầu (trước khi biết tỉ lệ màn hình). */
+export const CARD_COMPACT_DEFAULT: CardView = getCompactCardView(16 / 9);
+
+/** Camera khi thiệp đang ở chế độ thu gọn. */
 export function getCardStageCamera(aspect: number): {
   position: [number, number, number];
   lookAt: [number, number, number];
@@ -67,9 +73,6 @@ export function getCardStageCamera(aspect: number): {
   const zoomOut = aspect >= 1.8 ? 0 : Math.max(0, 2.4 - (aspect - 1.0) * 3.0);
   return { position: [0, 1.6, 4.6 + zoomOut], lookAt: [0, 1.0, 0.2] };
 }
-
-/** Giá trị mặc định cho lần render đầu (trước khi biết tỉ lệ màn hình). */
-export const CARD_COMPACT_DEFAULT: CardView = getCompactCardView(16 / 9);
 
 /** Vị trí/điểm nhìn của camera theo từng giai đoạn của game. */
 export function getSceneCamera(
@@ -86,12 +89,181 @@ export function getSceneCamera(
   if (phase === 'letter_reading') {
     return { position: [0, 1.6, 4.6 + zoomOut], lookAt: [0, 1.0, 0.2] };
   }
-  return { position: [0, 2.0, 4.9 + zoomOut], lookAt: [0, 0.78, 0] };
+  return { position: [0, 2.0, 4.9 + zoomOut], lookAt: [0, 0.85, 0] };
 }
 
 /**
- * Kiểm tra thiệp có nằm trọn trong khung hình hay không.
- * Dùng hình chiếu bảo thủ (bao gồm cả phần nhô ra của độ dày thiệp).
+ * Màn hình đủ rộng để xem cả hai trang (bìa + thư) cùng lúc.
+ * Màn hình hẹp (điện thoại) chỉ xem trang thư cho chữ to, dễ đọc.
+ */
+export function isSpreadView(aspect: number): boolean {
+  return aspect >= 1.25;
+}
+
+export interface CardReadLayout {
+  /** true = xem cả hai trang; false = chỉ xem trang thư (điện thoại). */
+  spread: boolean;
+  aspect: number;
+  scale: number;
+  /** Kích thước phần nội dung cần hiển thị (world units). */
+  contentWidth: number;
+  contentHeight: number;
+  /** Tâm nội dung theo trục X (trang thư khi xem một trang). */
+  contentCenterX: number;
+  /** Góc mở của bìa: màn hẹp gấp bìa ra sau lưng để không lấp chỗ. */
+  coverOpenAngle: number;
+  /** Vị trí & điểm nhìn của camera. */
+  camera: {
+    position: [number, number, number];
+    lookAt: [number, number, number];
+    distance: number;
+  };
+  /** Vùng chiều cao khả dụng (0 → 1, tính từ trên xuống). */
+  usable: { top: number; bottom: number };
+  /** Độ lệch điểm nhìn theo trục Y (world) để thiệp nằm giữa vùng khả dụng. */
+  usableOffsetY: number;
+}
+
+/**
+ * Toàn bộ bố cục khi MỞ RỘNG để đọc thiệp:
+ * - màn rộng: xem cả hai trang, bìa mở 3D bình thường;
+ * - màn hẹp: chỉ xem trang thư, bìa gấp hẳn ra sau, camera nhìn đúng
+ *   tâm trang thư và chừa chỗ cho thanh công cụ ở dưới.
+ */
+export function getCardReadLayout(
+  aspect: number,
+  fovDeg: number = CAMERA_FOV_DEG
+): CardReadLayout {
+  const spread = isSpreadView(aspect);
+  const scale = CARD_EXPANDED_VIEW.scale;
+  const contentWidth = CARD_PANEL.width * (spread ? 2 : 1) * scale;
+  const contentHeight = CARD_PANEL.height * scale;
+  const contentCenterX = spread ? 0 : (CARD_PANEL.width * scale) / 2;
+
+  const usable = {
+    top: CARD_READ_INSETS.top,
+    bottom: 1 - CARD_READ_INSETS.bottom,
+  };
+  const usableHeightFraction = Math.max(0.2, usable.bottom - usable.top);
+  const tanHalfFov = Math.tan((fovDeg * Math.PI) / 180 / 2);
+  const safeAspect = Math.max(0.2, aspect);
+
+  const needHalfWidth = contentWidth / 2 + CARD_VIEW_MARGIN.x;
+  const needHalfHeight = contentHeight / 2 + CARD_VIEW_MARGIN.y;
+
+  const distanceForWidth = needHalfWidth / (tanHalfFov * safeAspect);
+  const distanceForHeight = needHalfHeight / (tanHalfFov * usableHeightFraction);
+  const distance = Math.max(2.7, distanceForWidth, distanceForHeight);
+
+  const visibleHeight = 2 * distance * tanHalfFov;
+  const usableCenter = (usable.top + usable.bottom) / 2;
+  // Lệch điểm nhìn xuống dưới tâm thiệp để thiệp nằm giữa vùng khả dụng
+  const usableOffsetY = -(0.5 - usableCenter) * visibleHeight;
+
+  const [baseX, baseY, baseZ] = CARD_EXPANDED_VIEW.position;
+  const lookAt: [number, number, number] = [
+    baseX + contentCenterX,
+    baseY + usableOffsetY,
+    baseZ,
+  ];
+
+  return {
+    spread,
+    aspect,
+    scale,
+    contentWidth,
+    contentHeight,
+    contentCenterX,
+    coverOpenAngle: spread ? -Math.PI * 0.94 : -Math.PI,
+    camera: {
+      position: [lookAt[0], lookAt[1], baseZ + distance],
+      lookAt,
+      distance,
+    },
+    usable,
+    usableOffsetY,
+  };
+}
+
+/** Kích thước thật (world) của phần thiệp cần hiển thị khi mở rộng. */
+export function getExpandedCardExtent(aspect: number): {
+  spread: boolean;
+  width: number;
+  height: number;
+} {
+  const layout = getCardReadLayout(aspect);
+  return { spread: layout.spread, width: layout.contentWidth, height: layout.contentHeight };
+}
+
+/** Khoảng cách camera cần lùi để thiệp nằm gọn (kèm chừa chỗ thanh công cụ). */
+export function getCardReadDistance(aspect: number, fovDeg: number = CAMERA_FOV_DEG): number {
+  return getCardReadLayout(aspect, fovDeg).camera.distance;
+}
+
+/** Vị trí & điểm nhìn của camera ở chế độ đọc thiệp. */
+export function getCardReadCamera(
+  aspect: number,
+  fovDeg: number = CAMERA_FOV_DEG
+): { position: [number, number, number]; lookAt: [number, number, number]; distance: number } {
+  return getCardReadLayout(aspect, fovDeg).camera;
+}
+
+/**
+ * Kiểm tra thiệp (ở chế độ mở rộng) có nằm trọn trong VÙNG KHẢ DỤNG
+ * của màn hình hay không — tức không bị cắt mép và không bị thanh
+ * công cụ che. Trả về cả số đo để hiển thị khi test.
+ */
+export function checkCardReadFits(aspect: number, fovDeg: number = CAMERA_FOV_DEG): {
+  fits: boolean;
+  screenHalfHeightFraction: number;
+  screenHalfWidthFraction: number;
+  screenTop: number;
+  screenBottom: number;
+  screenLeft: number;
+  screenRight: number;
+  usable: { top: number; bottom: number };
+} {
+  const layout = getCardReadLayout(aspect, fovDeg);
+  const tanHalfFov = Math.tan((fovDeg * Math.PI) / 180 / 2);
+  const visibleHeight = 2 * layout.camera.distance * tanHalfFov;
+  const visibleWidth = visibleHeight * Math.max(0.2, aspect);
+
+  // Tâm thiệp so với điểm nhìn (theo trục Y thế giới)
+  const centerOffsetY = -layout.usableOffsetY;
+  const screenCenterY = 0.5 - centerOffsetY / visibleHeight;
+  const screenCenterX = 0.5; // điểm nhìn đã canh đúng tâm nội dung
+
+  const screenHalfHeightFraction =
+    layout.contentHeight / 2 / visibleHeight + CARD_VIEW_MARGIN.y / visibleHeight;
+  const screenHalfWidthFraction =
+    layout.contentWidth / 2 / visibleWidth + CARD_VIEW_MARGIN.x / visibleWidth;
+
+  const screenTop = screenCenterY - screenHalfHeightFraction;
+  const screenBottom = screenCenterY + screenHalfHeightFraction;
+  const screenLeft = screenCenterX - screenHalfWidthFraction;
+  const screenRight = screenCenterX + screenHalfWidthFraction;
+
+  const fits =
+    screenTop >= layout.usable.top - 1e-9 &&
+    screenBottom <= layout.usable.bottom + 1e-9 &&
+    screenLeft >= -1e-9 &&
+    screenRight <= 1 + 1e-9;
+
+  return {
+    fits,
+    screenHalfHeightFraction,
+    screenHalfWidthFraction,
+    screenTop,
+    screenBottom,
+    screenLeft,
+    screenRight,
+    usable: layout.usable,
+  };
+}
+
+/**
+ * Kiểm tra thiệp ở chế độ THU GỌN (bìa đóng, đặt cạnh nhân vật)
+ * có nằm trọn trong khung hình hay không.
  */
 export function checkCardFits(params: {
   view: CardView;
@@ -110,7 +282,6 @@ export function checkCardFits(params: {
   const { view, camera, aspect, spread, fovDeg = CAMERA_FOV_DEG } = params;
   const tanHalfFov = Math.tan((fovDeg * Math.PI) / 180 / 2);
 
-  // Hệ trục camera (camera luôn nhìn gần như song song trục -Z)
   const forward = [
     camera.lookAt[0] - camera.position[0],
     camera.lookAt[1] - camera.position[1],
@@ -126,7 +297,6 @@ export function checkCardFits(params: {
   ];
   const depth = Math.max(0.2, toCard[0] * f[0] + toCard[1] * f[1] + toCard[2] * f[2]);
 
-  // Trục ngang của camera (right = normalize(f × up))
   const right = [f[2], 0, -f[0]];
   const rLen = Math.hypot(right[0], right[1], right[2]) || 1;
   const r = [right[0] / rLen, right[1] / rLen, right[2] / rLen];
@@ -135,7 +305,6 @@ export function checkCardFits(params: {
   const visibleHalfHeight = depth * tanHalfFov;
   const visibleHalfWidth = visibleHalfHeight * Math.max(0.2, aspect);
 
-  // Bề rộng hình chiếu của thiệp (kể cả độ dày khi nghiêng)
   const panelWidth = CARD_PANEL.width * (spread ? 2 : 1) * view.scale;
   const panelThickness = CARD_PANEL.thickness * view.scale;
   const cos = Math.abs(Math.cos(view.rotationY));
@@ -154,63 +323,6 @@ export function checkCardFits(params: {
     cardHalfWidth,
     cardHalfHeight,
     lateralOffset: Math.abs(lateral),
-  };
-}
-
-/**
- * Màn hình đủ rộng để xem cả hai trang (bìa + thư) cùng lúc.
- * Màn hình hẹp sẽ chỉ xem trang thư cho chữ to, dễ đọc.
- */
-export function isSpreadView(aspect: number): boolean {
-  return aspect >= 1.25;
-}
-
-/** Kích thước thật (world) của phần thiệp cần hiển thị khi mở rộng. */
-export function getExpandedCardExtent(aspect: number): {
-  spread: boolean;
-  width: number;
-  height: number;
-} {
-  const spread = isSpreadView(aspect);
-  return {
-    spread,
-    width: CARD_PANEL.width * (spread ? 2 : 1) * CARD_EXPANDED_VIEW.scale,
-    height: CARD_PANEL.height * CARD_EXPANDED_VIEW.scale,
-  };
-}
-
-/**
- * Khoảng cách camera cần lùi để toàn bộ thiệp (đã mở rộng) nằm gọn
- * trong khung hình, kèm lề an toàn.
- */
-export function getCardReadDistance(aspect: number, fovDeg: number = CAMERA_FOV_DEG): number {
-  const { width, height } = getExpandedCardExtent(aspect);
-  const tanHalfFov = Math.tan((fovDeg * Math.PI) / 180 / 2);
-  const safeAspect = Math.max(0.2, aspect);
-
-  const neededHeight = height / 2 + CARD_VIEW_MARGIN.y;
-  const neededWidth = width / 2 + CARD_VIEW_MARGIN.x;
-
-  const distance = Math.max(
-    neededHeight / tanHalfFov,
-    neededWidth / (tanHalfFov * safeAspect)
-  );
-
-  // Không đưa camera quá sát thiệp (tránh phối cảnh bị méo)
-  return Math.max(2.7, distance);
-}
-
-/** Vị trí & điểm nhìn của camera ở chế độ đọc thiệp. */
-export function getCardReadCamera(
-  aspect: number,
-  fovDeg: number = CAMERA_FOV_DEG
-): { position: [number, number, number]; lookAt: [number, number, number]; distance: number } {
-  const distance = getCardReadDistance(aspect, fovDeg);
-  const [cx, cy, cz] = CARD_EXPANDED_VIEW.position;
-  return {
-    position: [cx, cy, cz + distance],
-    lookAt: [cx, cy, cz],
-    distance,
   };
 }
 

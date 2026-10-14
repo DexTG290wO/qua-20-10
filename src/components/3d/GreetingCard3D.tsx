@@ -6,6 +6,7 @@ import { audioEngine } from '../../utils/audioEngine';
 import {
   CARD_COMPACT_DEFAULT,
   CARD_EXPANDED_VIEW,
+  getCardReadLayout,
   getCompactCardView,
 } from '../../utils/layout';
 import {
@@ -141,6 +142,10 @@ export const GreetingCard3D: React.FC<GreetingCard3DProps> = ({
   const aspect = size.width / Math.max(1, size.height);
   const targetView = mode === 'expanded' ? CARD_EXPANDED_VIEW : getCompactCardView(aspect);
 
+  // Màn hình hẹp: chỉ đọc trang thư nên bìa gấp hẳn ra sau cho gọn khung hình
+  const readLayout = useMemo(() => getCardReadLayout(aspect), [aspect]);
+  const hingeAngle = readLayout.coverOpenAngle;
+
   const pageCanvas = useRef<HTMLCanvasElement | null>(null);
   const companionCanvas = useRef<HTMLCanvasElement | null>(null);
   const coverCanvas = useRef<HTMLCanvasElement | null>(null);
@@ -273,20 +278,22 @@ export const GreetingCard3D: React.FC<GreetingCard3DProps> = ({
     const pivot = coverPivotRef.current;
     if (!pivot) return;
 
-    if (isOpen) {
-      audioEngine.playEnvelopeOpen();
-      if (!reducedMotion) {
-        gsap.killTweensOf(pivot.rotation);
-        gsap.fromTo(pivot.rotation, { y: 0 }, { y: -Math.PI * 0.94, duration: 1.15, ease: 'power3.inOut' });
-      } else {
-        pivot.rotation.y = -Math.PI * 0.94;
-      }
-    } else {
-      audioEngine.playBoxShake();
-      gsap.killTweensOf(pivot.rotation);
-      gsap.to(pivot.rotation, { y: 0, duration: reducedMotion ? 0.01 : 0.7, ease: 'power2.inOut' });
+    const target = isOpen ? hingeAngle : 0;
+    if (isOpen) audioEngine.playEnvelopeOpen();
+    else audioEngine.playBoxShake();
+
+    if (reducedMotion) {
+      pivot.rotation.y = target;
+      return;
     }
-  }, [isOpen, reducedMotion]);
+
+    gsap.killTweensOf(pivot.rotation);
+    gsap.to(pivot.rotation, {
+      y: target,
+      duration: isOpen ? 1.15 : 0.7,
+      ease: isOpen ? 'power3.inOut' : 'power2.inOut',
+    });
+  }, [isOpen, reducedMotion, hingeAngle]);
 
   // ── Typewriter reveal: từng cụm chữ hiện dần trên mặt thiệp ──
   useEffect(() => {
@@ -504,12 +511,16 @@ export const GreetingCardOverlay: React.FC<GreetingCardOverlayProps> = ({
   onSkip,
   onRestart,
 }) => {
+  // Nút gọn hơn trên điện thoại để không che thiệp
   const btn =
-    'px-3 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer active:scale-95 select-none';
+    'px-2.5 py-1.5 sm:px-3 rounded-xl text-[11px] sm:text-xs font-semibold transition-all cursor-pointer active:scale-95 select-none whitespace-nowrap';
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-30 flex flex-col items-center gap-2 p-3 pointer-events-none">
-      <div className="pointer-events-auto flex items-center gap-2 flex-wrap justify-center px-3 py-2 rounded-2xl bg-white/85 backdrop-blur-md border border-pink-200 shadow-lg shadow-pink-300/20 max-w-full">
+    <div
+      className="fixed inset-x-0 bottom-0 z-30 flex flex-col items-center gap-1.5 px-2 sm:gap-2 sm:p-3 pointer-events-none"
+      style={{ paddingBottom: 'max(0.6rem, env(safe-area-inset-bottom))' }}
+    >
+      <div className="pointer-events-auto flex items-center gap-1.5 sm:gap-2 flex-wrap justify-center px-2 py-1.5 sm:px-3 sm:py-2 rounded-2xl bg-white/90 backdrop-blur-md border border-pink-200 shadow-lg shadow-pink-300/20 max-w-full">
         <span className="hidden md:inline-flex items-center gap-1.5 text-xs font-bold text-rose-800 pl-1 pr-2 border-r border-pink-200">
           💌 {displayName}
           <span className="text-[10px] font-medium text-pink-500">· {rarityLabel}</span>
@@ -527,13 +538,21 @@ export const GreetingCardOverlay: React.FC<GreetingCardOverlayProps> = ({
         {isExpanded && (
           <>
             <button onClick={onSkip} className={`${btn} bg-pink-100 hover:bg-pink-200 text-pink-700`}>
-              Hiện toàn bộ
+              <span className="sm:hidden">Toàn bộ</span>
+              <span className="hidden sm:inline">Hiện toàn bộ</span>
             </button>
             <button onClick={onReplay} className={`${btn} bg-pink-100 hover:bg-pink-200 text-pink-700`}>
               Đọc lại
             </button>
             <button onClick={onToggleOpen} className={`${btn} bg-slate-100 hover:bg-slate-200 text-gray-700`}>
-              {isOpen ? 'Gấp thiệp lại' : 'Mở thiệp'}
+              {isOpen ? (
+                <>
+                  <span className="sm:hidden">Gấp</span>
+                  <span className="hidden sm:inline">Gấp thiệp lại</span>
+                </>
+              ) : (
+                'Mở thiệp'
+              )}
             </button>
             <button onClick={onCollapse} className={`${btn} bg-slate-800 hover:bg-slate-700 text-white`}>
               Đóng
@@ -546,13 +565,23 @@ export const GreetingCardOverlay: React.FC<GreetingCardOverlayProps> = ({
           disabled={isExporting}
           className={`${btn} bg-gradient-to-r from-pink-500 to-rose-500 text-white shadow-sm hover:opacity-90 disabled:opacity-60`}
         >
-          {isExporting ? 'Đang lưu…' : 'Lưu thiệp 📥'}
+          {isExporting ? (
+            'Đang lưu…'
+          ) : (
+            <>
+              <span className="sm:hidden">Lưu 📥</span>
+              <span className="hidden sm:inline">Lưu thiệp 📥</span>
+            </>
+          )}
         </button>
         <button onClick={onRestart} className={`${btn} bg-slate-100 hover:bg-slate-200 text-gray-700`}>
-          Thử tên khác
+          <span className="sm:hidden">Tên khác</span>
+          <span className="hidden sm:inline">Thử tên khác</span>
         </button>
       </div>
-      <p className="pointer-events-none text-[11px] font-medium text-rose-800/80 drop-shadow-sm">
+
+      {/* Gợi ý chỉ hiện trên màn hình đủ rộng để không che thiệp trên điện thoại */}
+      <p className="pointer-events-none hidden sm:block text-[11px] font-medium text-rose-800/80 drop-shadow-sm text-center px-2">
         {isExpanded
           ? `Đang đọc thiệp dành cho ${displayName} • bấm "Đóng" để quay lại`
           : `Món quà của ${displayName}: ${companionName} • bấm "Đọc thiệp" để xem rõ hơn`}
