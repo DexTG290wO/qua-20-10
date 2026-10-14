@@ -153,7 +153,32 @@ Lưu ý chung khi deploy:
   người biết kỹ thuật có thể đọc được. Đừng đặt thông tin nhạy cảm trong đó.
 - `dist/` (1.4 MB, gzip ~380 KB) nằm trong `.gitignore` — không commit lên repo.
 
+## Xem trước từng model 3D (chỉ khi dev)
+
+Muốn xem từng nhân vật trông thế nào mà không phải chơi hết game:
+
+```bash
+npm run dev
+```
+
+Rồi mở **http://localhost:5173/preview.html**
+
+Trang này có:
+
+- **15 model** liệt kê theo bậc độ hiếm — bấm để xem từng con, hoặc dùng phím **← →**.
+- **Kéo chuột** để xoay 360°, **lăn chuột** (hoặc nút Zoom ±) để phóng to/thu nhỏ,
+  nút *Tự xoay*, *Góc nhìn gốc*, *Ngang tầm mắt*.
+- Hiện **đường dẫn file** của model đang xem (ví dụ
+  `src/components/3d/characters/Corgi3D.tsx`) để bạn biết cần sửa file nào.
+- Hiện **số đo thật** của model: `chân (minY)`, `đầu (maxY)`, chiều cao, chiều rộng.
+  `minY` phải xấp xỉ **0** (chân chạm mặt cỏ) — nếu lệch nhiều nghĩa là model đó
+  đang đặt sai độ cao, chỉ cần chỉnh trong file của nó.
+
+> Trang `preview.html` **chỉ tồn tại khi chạy `npm run dev`**. Lệnh `npm run build`
+> chỉ build `index.html` nên trang này không bao giờ lọt vào `dist/`.
+
 ## Nơi cấu hình (chỉ sửa dữ liệu, không cần chạm vào animation)
+
 
 | Nội dung cần sửa | Tệp |
 | --- | --- |
