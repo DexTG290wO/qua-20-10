@@ -22,6 +22,8 @@ import {
 import {
   CARD_PANEL,
   CARD_EXPANDED_VIEW,
+  CARD_READ_INSETS,
+  CAMERA_FOV_DEG,
   checkCardFits,
   checkCardReadFits,
   getCardReadCamera,
@@ -30,8 +32,20 @@ import {
   getCompactCardView,
   getCardStageCamera,
   getCharacterPosition,
+  getReadInsets,
   isSpreadView,
+  shouldShowCharacterInScene,
 } from './src/utils/layout.ts';
+import {
+  CARD_PAGE_HEIGHT,
+  CARD_PAGE_WIDTH,
+  COMPANION_CARD,
+  LETTER_PICTURE,
+  drawCompanionPage,
+  drawLetterPage,
+  fitContain,
+  getLetterPictureBlockHeight,
+} from './src/utils/cardRenderer.ts';
 import {
   createPetalGeometry,
   createFourPointStarGeometry,
@@ -519,6 +533,83 @@ check(
   `${(checkCardReadFits(0.45).screenHalfWidthFraction * 200).toFixed(0)}% bề ngang`
 );
 
+// ── Android Chrome: khung 3D cao đúng vùng nhìn thấy, thanh công cụ
+//    (có thể xuống 2–3 hàng nút) được chừa chỗ theo số đo thật ──
+console.log('--- Test 17d: Thanh công cụ thật trên điện thoại ---');
+const phoneViewport = 740; // px vùng nhìn thấy trên điện thoại
+const phoneToolbar = 128; // px hàng nút xuống nhiều hàng + safe-area
+const phoneInsets = getReadInsets(phoneViewport, phoneToolbar);
+const phoneFit = checkCardReadFits(0.45, CAMERA_FOV_DEG, phoneInsets);
+check(
+  'Điện thoại: chừa chỗ theo số đo thật của thanh công cụ',
+  phoneInsets.bottom > CARD_READ_INSETS.bottom &&
+    Math.abs(phoneInsets.bottom - (phoneToolbar / phoneViewport + 0.02)) < 1e-9,
+  `${(phoneInsets.bottom * 100).toFixed(1)}% (mặc định ${(CARD_READ_INSETS.bottom * 100).toFixed(0)}%)`
+);
+check(
+  'Điện thoại: thiệp vẫn nằm gọn phía trên thanh công cụ',
+  phoneFit.fits,
+  `đáy ${(phoneFit.screenBottom * 100).toFixed(1)}% ≤ vùng khả dụng ${(phoneFit.usable.bottom * 100).toFixed(1)}%`
+);
+check(
+  'Thanh công cụ thấp (màn rộng) giữ nguyên bố cục cũ',
+  getReadInsets(900, 60).bottom === CARD_READ_INSETS.bottom &&
+    Math.abs(
+      getCardReadCamera(1.78).position[0] -
+        getCardReadCamera(1.78, CAMERA_FOV_DEG, getReadInsets(900, 60)).position[0]
+    ) < 1e-9
+);
+check(
+  'Thanh công cụ quá cao bị chặn trần để thiệp không biến mất',
+  getReadInsets(400, 380).bottom <= 0.45 && getCardReadLayout(0.45, CAMERA_FOV_DEG, getReadInsets(400, 380)).usable.bottom > 0.5
+);
+
+// ── Ảnh 2D của nhân vật in vào trang thư ──
+console.log('--- Test 17e: Ảnh nhân vật trên trang thư ---');
+check(
+  'Nhân vật 3D chỉ đứng ở sân khấu phần thưởng, không đứng khi mở thiệp',
+  shouldShowCharacterInScene('reward_stage') &&
+    shouldShowCharacterInScene('secret_reveal') &&
+    !shouldShowCharacterInScene('letter_reading') &&
+    !shouldShowCharacterInScene('intro') &&
+    !shouldShowCharacterInScene('roulette')
+);
+check(
+  'Ảnh chân dung nằm gọn khung và giữ đúng tỉ lệ',
+  (() => {
+    const box = { w: LETTER_PICTURE.width - 26, h: LETTER_PICTURE.height - 26 };
+    const fit = fitContain(640, 760, box.w, box.h);
+    return (
+      fit.width <= box.w + 1e-9 &&
+      fit.height <= box.h + 1e-9 &&
+      Math.abs(fit.width / fit.height - 640 / 760) < 1e-9
+    );
+  })()
+);
+check(
+  'Ảnh nằm ngang cũng bị giới hạn theo bề ngang khung',
+  (() => {
+    const fit = fitContain(2000, 400, 294, 274);
+    return (
+      fit.width <= 294 + 1e-9 &&
+      fit.height <= 274 + 1e-9 &&
+      Math.abs(fit.width / fit.height - 5) < 1e-9
+    );
+  })()
+);
+check(
+  'Kích thước ảnh không hợp lệ vẫn không làm vỡ phép tính',
+  (() => {
+    const fit = fitContain(0, 0, 100, 200);
+    return Number.isFinite(fit.width) && Number.isFinite(fit.height) && fit.width > 0 && fit.height > 0;
+  })()
+);
+check(
+  'Khối ảnh đủ lớn để nhìn rõ nhưng không chiếm hết trang thư',
+  getLetterPictureBlockHeight() > 260 && getLetterPictureBlockHeight() < CARD_PAGE_HEIGHT * 0.4,
+  `${getLetterPictureBlockHeight()}px trên trang ${CARD_PAGE_HEIGHT}px`
+);
+
 const compactChar = getCharacterPosition('letter_reading', false);
 const expandedChar = getCharacterPosition('letter_reading', true);
 const wideCompactView = getCompactCardView(1.78);
@@ -731,6 +822,218 @@ check('Wang Yi dùng bộ lời chúc riêng', RECIPIENT_GREETINGS['wang-yi'].in
 check(
   'Wang Yi: phần thưởng Secret vẫn cao nhất sau mọi thay đổi',
   normalizeOdds(wangProfile.odds || {}).secret === 15
+);
+
+// ── 21. Bố cục & độ dễ đọc của mặt thiệp chính ─────────────
+console.log('\n--- Test 21: Mặt thiệp chính (mọi bậc, chữ ngắn & dài) ---');
+
+interface RecordedText {
+  text: string;
+  x: number;
+  y: number;
+  font: string;
+  align: string;
+}
+
+/** Canvas context giả để chạy bộ vẽ thiệp trong môi trường Node. */
+function createStubCtx(): { ctx: any; calls: RecordedText[] } {
+  const calls: RecordedText[] = [];
+  const gradient = { addColorStop: () => {} };
+  const ctx: any = {
+    fillStyle: '',
+    strokeStyle: '',
+    lineWidth: 1,
+    font: '500 16px sans-serif',
+    textBaseline: 'alphabetic',
+    textAlign: 'left',
+    shadowColor: '',
+    shadowBlur: 0,
+    shadowOffsetY: 0,
+    clearRect: () => {},
+    fillRect: () => {},
+    beginPath: () => {},
+    closePath: () => {},
+    moveTo: () => {},
+    lineTo: () => {},
+    arcTo: () => {},
+    arc: () => {},
+    ellipse: () => {},
+    quadraticCurveTo: () => {},
+    fill: () => {},
+    stroke: () => {},
+    save: () => {},
+    restore: () => {},
+    translate: () => {},
+    rotate: () => {},
+    scale: () => {},
+    clip: () => {},
+    drawImage: () => {},
+    createLinearGradient: () => gradient,
+    createRadialGradient: () => gradient,
+    fillText: (text: string, x: number, y: number) => {
+      calls.push({ text, x, y, font: ctx.font, align: ctx.textAlign });
+    },
+    measureText: (text: string) => {
+      const match = /(\d+(?:\.\d+)?)px/.exec(ctx.font);
+      const size = match ? parseFloat(match[1]) : 16;
+      let width = 0;
+      for (const ch of text) width += ch === ' ' ? size * 0.3 : size * 0.56;
+      return { width };
+    },
+  };
+  return { ctx, calls };
+}
+
+/** Nối các dòng đã vẽ của lời chúc (giữa hai dấu ngoặc kép trang trí). */
+function extractGreeting(calls: RecordedText[]): string {
+  const start = calls.findIndex((c) => c.text.includes('“'));
+  if (start < 0) return '';
+  let end = start;
+  for (let i = start; i < calls.length; i++) {
+    if (calls[i].text.includes('”')) {
+      end = i;
+      break;
+    }
+  }
+  return calls.slice(start, end + 1).map((c) => c.text).join(' ');
+}
+
+/** Lỗi nếu có chữ vẽ ra ngoài trang (cắt chữ / tràn lề). */
+function outOfBounds(calls: RecordedText[]): RecordedText | null {
+  return (
+    calls.find(
+      (c) => c.y < 24 || c.y > CARD_PAGE_HEIGHT - 24 || c.x < 0 || c.x > CARD_PAGE_WIDTH
+    ) ?? null
+  );
+}
+
+function checkCompanionCard(label: string, data: NonNullable<ReturnType<typeof buildCardData>>) {
+  const { ctx, calls } = createStubCtx();
+  drawCompanionPage(ctx, data);
+  const allText = calls.map((c) => c.text).join(' ');
+
+  const bad = outOfBounds(calls);
+  check(
+    `${label}: không có chữ nào tràn khỏi thiệp`,
+    bad === null,
+    bad ? `"${bad.text}" @ y=${bad.y.toFixed(0)}` : `${calls.length} lượt chữ`
+  );
+  check(`${label}: có tên người nhận "${data.displayName}"`, allText.includes(data.displayName));
+  check(`${label}: có tên phần thưởng`, allText.includes(data.companionName));
+  check(
+    `${label}: có nhãn bậc "${data.rarityLabel.toUpperCase()}"`,
+    allText.includes(data.rarityLabel.toUpperCase())
+  );
+  check(`${label}: có mô tả nhân vật`, allText.includes(data.companionIntro));
+  check(
+    `${label}: lời chúc hiện ĐẦY ĐỦ (không cắt câu)`,
+    extractGreeting(calls) === `“${data.companionCatchphrase}”`,
+    extractGreeting(calls).slice(0, 40)
+  );
+
+  // Lời chúc phải nằm trên chân trang và không quá nhỏ để đọc
+  const greetingCalls = calls.filter((c) => c.text.includes('“') || c.text.includes('”'));
+  const maxY = Math.max(...greetingCalls.map((c) => c.y), 0);
+  const footerDrawn = calls.some((c) => Math.abs(c.y - COMPANION_CARD.footerY) < 0.5);
+  check(
+    `${label}: lời chúc không đè chân trang & không tràn khỏi thiệp`,
+    maxY <= CARD_PAGE_HEIGHT - 56 && (!footerDrawn || maxY < COMPANION_CARD.footerY - 10),
+    `y=${maxY.toFixed(0)}${footerDrawn ? ' (còn chân trang)' : ' (bỏ chân trang cho vừa chữ)'}`
+  );
+
+  const greetSizes = greetingCalls
+    .map((c) => /(\d+(?:\.\d+)?)px/.exec(c.font))
+    .map((m) => (m ? parseFloat(m[1]) : 0));
+  check(
+    `${label}: cỡ chữ lời chúc vẫn dễ đọc (≥22px trên trang 1000px)`,
+    greetSizes.every((s) => s >= 22),
+    `${Math.min(...greetSizes).toFixed(1)}px`
+  );
+  return calls;
+}
+
+const wangCardResult = matchRecipient('Wang Yi', RECIPIENTS)!;
+const baseContent = {
+  greetingText: 'Lời chúc ngẫu nhiên của lượt này.',
+  closingText: 'Câu kết ngắn của lượt này.',
+  displayName: 'Wang Yi',
+  fullName: 'Wang Yi',
+};
+
+// Thường: Heo Hồng Dâu Tây
+const normalPig = REWARD_MAP['pig-pink'];
+const cardNormalPig = buildCardData({ result: wangCardResult, reward: normalPig, content: baseContent })!;
+check('Thường: đúng phần thưởng đã chọn', cardNormalPig.companionName === 'Heo Hồng Dâu Tây');
+check('Thường: đúng nhãn bậc', cardNormalPig.rarityLabel === 'Thường');
+check(
+  'Thường: chân dung gắn đúng hồ sơ người nhận',
+  Boolean(cardNormalPig.portraitUrl && cardNormalPig.portraitUrl.includes('wang-yi'))
+);
+checkCompanionCard('Thường', cardNormalPig);
+
+// Secret: Thỏ Ánh Trăng Vĩnh Cửu
+const secretBunny = REWARD_MAP['bunny-secret'];
+const cardSecret = buildCardData({ result: wangCardResult, reward: secretBunny, content: baseContent })!;
+check('Secret: đúng phần thưởng đã chọn', cardSecret.companionName === 'Thỏ Ánh Trăng Vĩnh Cửu');
+check('Secret: đúng nhãn bậc', cardSecret.rarityLabel === 'Huyền Bí');
+checkCompanionCard('Secret', cardSecret);
+
+// Lời chúc rất dài: phải hiện đủ, chỉ thu nhỏ vừa phải
+const longCatchphrase = Array.from({ length: 6 })
+  .map(
+    () =>
+      'Ước gì bạn luôn giữ được nụ cười thật tươi, gặp nhiều điều tử tế và có những người bạn đồng hành dịu dàng bên cạnh.'
+  )
+  .join(' ');
+const cardLong = buildCardData({ result: wangCardResult, reward: normalPig, content: baseContent })!;
+cardLong.companionCatchphrase = longCatchphrase;
+checkCompanionCard('Lời chúc rất dài', cardLong);
+
+// ── 21b. Trang thư với lời chúc dài vẫn không tràn trang ────
+console.log('--- Test 21b: Trang thư khi lời chúc dài ---');
+const longGreeting =
+  'Điều mình mong nhất hôm nay là bạn có đủ dũng khí để theo đuổi điều mình thích, đủ bình yên để tận hưởng những điều giản dị và thật nhiều lý do để mỉm cười thật nhiều hơn nữa.';
+const cardLetterLong = buildCardData({
+  result: wangCardResult,
+  reward: secretBunny,
+  content: { ...baseContent, greetingText: longGreeting },
+})!;
+{
+  const { ctx, calls } = createStubCtx();
+  drawLetterPage(ctx, cardLetterLong, Number.MAX_SAFE_INTEGER, null);
+  const bad = outOfBounds(calls);
+  check(
+    'Trang thư (lời chúc dài): không có chữ nào tràn khỏi trang',
+    bad === null,
+    bad ? `"${bad.text}" @ y=${bad.y.toFixed(0)}` : `${calls.length} lượt chữ`
+  );
+  check('Trang thư: hiện đủ lời chúc dài', calls.map((c) => c.text).join(' ').includes(longGreeting));
+  check('Trang thư: hiện tên người nhận', calls.map((c) => c.text).join(' ').includes('Wang Yi'));
+}
+
+// ── 22. Chuyển giữa trang thư và trang chân dung (màn hẹp) ──
+console.log('\n--- Test 22: Chọn trang thiệp trên màn hình hẹp ---');
+const pageHalf = (CARD_PANEL.width * CARD_EXPANDED_VIEW.scale) / 2;
+const letterPageLayout = getCardReadLayout(0.45);
+const portraitPageLayout = getCardReadLayout(0.45, CAMERA_FOV_DEG, CARD_READ_INSETS, 'portrait');
+check('Mặc định vẫn là trang thư', letterPageLayout.page === 'letter');
+check(
+  'Trang thư được canh về bên phải',
+  Math.abs(letterPageLayout.camera.lookAt[0] - pageHalf) < 1e-9,
+  `lookAt.x=${letterPageLayout.camera.lookAt[0].toFixed(3)}`
+);
+check(
+  'Trang chân dung được canh về bên trái',
+  Math.abs(portraitPageLayout.camera.lookAt[0] + pageHalf) < 1e-9,
+  `lookAt.x=${portraitPageLayout.camera.lookAt[0].toFixed(3)}`
+);
+check(
+  'Trang chân dung vẫn nằm gọn khung hình',
+  checkCardReadFits(0.45, CAMERA_FOV_DEG, CARD_READ_INSETS, 'portrait').fits
+);
+check(
+  'Bìa vẫn mở hẳn để mặt trong (chân dung) hướng về người xem',
+  portraitPageLayout.coverOpenAngle === -Math.PI
 );
 
 if (failures > 0) {

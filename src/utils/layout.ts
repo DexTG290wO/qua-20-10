@@ -27,6 +27,26 @@ export const CARD_VIEW_MARGIN = { x: 0.18, y: 0.16 };
  */
 export const CARD_READ_INSETS = { top: 0.05, bottom: 0.15 };
 
+export interface CardReadInsets {
+  top: number;
+  bottom: number;
+}
+
+/**
+ * Vùng chừa theo số đo thật của thanh công cụ (px) — trên điện thoại
+ * hàng nút có thể xuống 2–3 hàng nên phần chừa phải khớp.
+ * Luôn chừa ít nhất mức mặc định để hành vi trên màn rộng không đổi.
+ */
+export function getReadInsets(
+  viewportHeightPx: number,
+  toolbarHeightPx: number
+): CardReadInsets {
+  const viewport = Math.max(1, viewportHeightPx);
+  const measured = Math.max(0, toolbarHeightPx) / viewport;
+  const bottom = Math.min(0.45, Math.max(CARD_READ_INSETS.bottom, measured + 0.02));
+  return { top: CARD_READ_INSETS.top, bottom };
+}
+
 /** Vị trí/độ nghiêng của thiệp khi đặt cạnh nhân vật (chế độ thu gọn). */
 export const CARD_COMPACT_VIEW = {
   position: [-1.42, 1.12, 0.9] as [number, number, number],
@@ -94,21 +114,26 @@ export function getSceneCamera(
 
 /**
  * Màn hình đủ rộng để xem cả hai trang (bìa + thư) cùng lúc.
- * Màn hình hẹp (điện thoại) chỉ xem trang thư cho chữ to, dễ đọc.
+ * Màn hình hẹp (điện thoại) chỉ xem MỘT trang cho chữ to, dễ đọc.
  */
 export function isSpreadView(aspect: number): boolean {
   return aspect >= 1.25;
 }
 
+/** Trang nào đang được canh giữa khi màn hình hẹp (chỉ xem một trang). */
+export type CardPage = 'letter' | 'portrait';
+
 export interface CardReadLayout {
-  /** true = xem cả hai trang; false = chỉ xem trang thư (điện thoại). */
+  /** true = xem cả hai trang; false = chỉ xem một trang (điện thoại). */
   spread: boolean;
   aspect: number;
   scale: number;
+  /** Trang đang canh giữa khi xem một trang. */
+  page: CardPage;
   /** Kích thước phần nội dung cần hiển thị (world units). */
   contentWidth: number;
   contentHeight: number;
-  /** Tâm nội dung theo trục X (trang thư khi xem một trang). */
+  /** Tâm nội dung theo trục X (trang được chọn khi xem một trang). */
   contentCenterX: number;
   /** Góc mở của bìa: màn hẹp gấp bìa ra sau lưng để không lấp chỗ. */
   coverOpenAngle: number;
@@ -127,22 +152,25 @@ export interface CardReadLayout {
 /**
  * Toàn bộ bố cục khi MỞ RỘNG để đọc thiệp:
  * - màn rộng: xem cả hai trang, bìa mở 3D bình thường;
- * - màn hẹp: chỉ xem trang thư, bìa gấp hẳn ra sau, camera nhìn đúng
- *   tâm trang thư và chừa chỗ cho thanh công cụ ở dưới.
+ * - màn hẹp: chỉ xem MỘT trang (theo `page`), bìa gấp hẳn ra sau, camera
+ *   nhìn đúng tâm trang đó và chừa chỗ cho thanh công cụ ở dưới.
  */
 export function getCardReadLayout(
   aspect: number,
-  fovDeg: number = CAMERA_FOV_DEG
+  fovDeg: number = CAMERA_FOV_DEG,
+  insets: CardReadInsets = CARD_READ_INSETS,
+  page: CardPage = 'letter'
 ): CardReadLayout {
   const spread = isSpreadView(aspect);
   const scale = CARD_EXPANDED_VIEW.scale;
   const contentWidth = CARD_PANEL.width * (spread ? 2 : 1) * scale;
   const contentHeight = CARD_PANEL.height * scale;
-  const contentCenterX = spread ? 0 : (CARD_PANEL.width * scale) / 2;
+  const pageHalf = (CARD_PANEL.width * scale) / 2;
+  const contentCenterX = spread ? 0 : page === 'portrait' ? -pageHalf : pageHalf;
 
   const usable = {
-    top: CARD_READ_INSETS.top,
-    bottom: 1 - CARD_READ_INSETS.bottom,
+    top: insets.top,
+    bottom: 1 - insets.bottom,
   };
   const usableHeightFraction = Math.max(0.2, usable.bottom - usable.top);
   const tanHalfFov = Math.tan((fovDeg * Math.PI) / 180 / 2);
@@ -171,6 +199,7 @@ export function getCardReadLayout(
     spread,
     aspect,
     scale,
+    page,
     contentWidth,
     contentHeight,
     contentCenterX,
@@ -186,26 +215,36 @@ export function getCardReadLayout(
 }
 
 /** Kích thước thật (world) của phần thiệp cần hiển thị khi mở rộng. */
-export function getExpandedCardExtent(aspect: number): {
+export function getExpandedCardExtent(
+  aspect: number,
+  page: CardPage = 'letter'
+): {
   spread: boolean;
   width: number;
   height: number;
 } {
-  const layout = getCardReadLayout(aspect);
+  const layout = getCardReadLayout(aspect, CAMERA_FOV_DEG, CARD_READ_INSETS, page);
   return { spread: layout.spread, width: layout.contentWidth, height: layout.contentHeight };
 }
 
 /** Khoảng cách camera cần lùi để thiệp nằm gọn (kèm chừa chỗ thanh công cụ). */
-export function getCardReadDistance(aspect: number, fovDeg: number = CAMERA_FOV_DEG): number {
-  return getCardReadLayout(aspect, fovDeg).camera.distance;
+export function getCardReadDistance(
+  aspect: number,
+  fovDeg: number = CAMERA_FOV_DEG,
+  insets: CardReadInsets = CARD_READ_INSETS,
+  page: CardPage = 'letter'
+): number {
+  return getCardReadLayout(aspect, fovDeg, insets, page).camera.distance;
 }
 
 /** Vị trí & điểm nhìn của camera ở chế độ đọc thiệp. */
 export function getCardReadCamera(
   aspect: number,
-  fovDeg: number = CAMERA_FOV_DEG
+  fovDeg: number = CAMERA_FOV_DEG,
+  insets: CardReadInsets = CARD_READ_INSETS,
+  page: CardPage = 'letter'
 ): { position: [number, number, number]; lookAt: [number, number, number]; distance: number } {
-  return getCardReadLayout(aspect, fovDeg).camera;
+  return getCardReadLayout(aspect, fovDeg, insets, page).camera;
 }
 
 /**
@@ -213,7 +252,12 @@ export function getCardReadCamera(
  * của màn hình hay không — tức không bị cắt mép và không bị thanh
  * công cụ che. Trả về cả số đo để hiển thị khi test.
  */
-export function checkCardReadFits(aspect: number, fovDeg: number = CAMERA_FOV_DEG): {
+export function checkCardReadFits(
+  aspect: number,
+  fovDeg: number = CAMERA_FOV_DEG,
+  insets: CardReadInsets = CARD_READ_INSETS,
+  page: CardPage = 'letter'
+): {
   fits: boolean;
   screenHalfHeightFraction: number;
   screenHalfWidthFraction: number;
@@ -223,7 +267,7 @@ export function checkCardReadFits(aspect: number, fovDeg: number = CAMERA_FOV_DE
   screenRight: number;
   usable: { top: number; bottom: number };
 } {
-  const layout = getCardReadLayout(aspect, fovDeg);
+  const layout = getCardReadLayout(aspect, fovDeg, insets, page);
   const tanHalfFov = Math.tan((fovDeg * Math.PI) / 180 / 2);
   const visibleHeight = 2 * layout.camera.distance * tanHalfFov;
   const visibleWidth = visibleHeight * Math.max(0.2, aspect);
@@ -324,6 +368,16 @@ export function checkCardFits(params: {
     cardHalfHeight,
     lateralOffset: Math.abs(lateral),
   };
+}
+
+/**
+ * Nhân vật 3D có đứng trong scene ở giai đoạn này không.
+ * Khi mở thiệp (`letter_reading`) nhân vật KHÔNG còn đứng cạnh thiệp nữa —
+ * hình 2D của nó đã được chụp sẵn và in vào trang thư (utils/cardRenderer.ts),
+ * nhờ vậy thiệp là tâm điểm và không có hai nhân vật trùng nhau.
+ */
+export function shouldShowCharacterInScene(phase: string): boolean {
+  return phase === 'reward_stage' || phase === 'secret_reveal';
 }
 
 /** Vị trí nhân vật trong scene theo chế độ hiển thị thiệp. */

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
+import { groundCorrection } from '../../../utils/groundSnap';
 import { OrangeCat3D } from './OrangeCat3D';
 import { Corgi3D } from './Corgi3D';
 import { Duckling3D } from './Duckling3D';
@@ -58,6 +59,7 @@ export const CharacterRenderer: React.FC<CharacterRendererProps> = ({
 }) => {
   const groundRef = useRef<THREE.Group>(null);
   const measuredRef = useRef(false);
+  const attemptsRef = useRef(0);
   const [groundOffset, setGroundOffset] = useState(CHARACTER_GROUND_LIFT * scale);
 
   const isDecal = useCallback(
@@ -66,8 +68,8 @@ export const CharacterRenderer: React.FC<CharacterRendererProps> = ({
     []
   );
 
-  /** Đo đáy thật của model (bỏ qua chi tiết trong suốt) → khoảng cần nhấc. */
-  const measureGroundOffset = useCallback((): number | null => {
+  /** Đáy hiện tại của model trong không gian thế giới (bỏ qua chi tiết trong suốt). */
+  const measureBottom = useCallback((): number | null => {
     const root = groundRef.current;
     if (!root) return null;
 
@@ -84,37 +86,44 @@ export const CharacterRenderer: React.FC<CharacterRendererProps> = ({
     });
 
     if (box.isEmpty() || !Number.isFinite(box.min.y)) return null;
-    return -box.min.y;
+    return box.min.y;
   }, [isDecal]);
 
-  // Đo lúc mount và đo lại sau ít frame (model có thể chưa dựng xong ngay)
+  /**
+   * Bù dần cho tới khi đáy model nằm đúng mặt cỏ.
+   * Dùng phép bù TƯƠNG ĐỐI (xem `groundCorrection`) rồi đo lại để tự kiểm tra.
+   */
+  const fixGroundOffset = useCallback(() => {
+    if (attemptsRef.current >= 4) {
+      measuredRef.current = true;
+      return;
+    }
+    const minY = measureBottom();
+    if (minY === null) return;
+    if (Math.abs(minY) < 0.005) {
+      measuredRef.current = true;
+      return;
+    }
+    attemptsRef.current += 1;
+    setGroundOffset((prev) => groundCorrection(prev, minY));
+  }, [measureBottom]);
+
+  // Đo lúc mount và đo lại vài lần (model có thể chưa dựng xong ngay)
   useEffect(() => {
     measuredRef.current = false;
+    attemptsRef.current = 0;
     setGroundOffset(CHARACTER_GROUND_LIFT * scale);
 
-    const tryMeasure = () => {
-      const offset = measureGroundOffset();
-      if (offset === null) return;
-      measuredRef.current = true;
-      setGroundOffset(offset);
-    };
+    const timers = [0, 150, 700, 1400].map((delay) =>
+      window.setTimeout(fixGroundOffset, delay)
+    );
+    return () => timers.forEach((id) => window.clearTimeout(id));
+  }, [characterType, scale, fixGroundOffset]);
 
-    tryMeasure();
-    const t1 = window.setTimeout(tryMeasure, 150);
-    const t2 = window.setTimeout(tryMeasure, 700);
-    return () => {
-      window.clearTimeout(t1);
-      window.clearTimeout(t2);
-    };
-  }, [characterType, scale, measureGroundOffset]);
-
-  // Bảo hiểm: đo ngay ở frame render đầu tiên (chắc chắn model đã dựng xong)
+  // Bảo hiểm: bù ngay ở những frame đầu (chắc chắn model đã dựng xong)
   useFrame(() => {
     if (measuredRef.current) return;
-    const offset = measureGroundOffset();
-    if (offset === null) return;
-    measuredRef.current = true;
-    setGroundOffset(offset);
+    fixGroundOffset();
   });
 
   const renderCharacter = () => {

@@ -7,7 +7,7 @@ import type { ItemReward } from '../../types/reward';
 import type { RarityType } from '../../types/rarity';
 import { RARITY_CONFIGS } from '../../config/rarity';
 import type { CardTextData } from '../../utils/cardRenderer';
-import { getCardReadCamera, getCardStageCamera, getCharacterPosition, getCharacterScale, getSceneCamera } from '../../utils/layout';
+import { CAMERA_FOV_DEG, getCardReadCamera, getCardStageCamera, getCharacterPosition, getCharacterScale, getReadInsets, getSceneCamera, shouldShowCharacterInScene, type CardPage } from '../../utils/layout';
 import { GiftBox3D } from './GiftBox3D';
 import { CharacterRenderer } from './characters/CharacterRenderer';
 import { SoftShadow } from './SoftShadow';
@@ -31,10 +31,14 @@ interface SceneContainerProps {
   onBoxOpened?: () => void;
   isCardOpen?: boolean;
   cardMode?: CardMode;
+  /** Trang đang canh giữa khi xem một trang trên màn hình hẹp. */
+  cardPage?: CardPage;
   onToggleCard?: () => void;
   skipToken?: number;
   replayToken?: number;
   reducedMotion?: boolean;
+  /** Chiều cao thật của thanh công cụ (px) — chừa chỗ khi mở thiệp trên điện thoại. */
+  toolbarHeightPx?: number;
 }
 
 /**
@@ -148,8 +152,10 @@ const RewardReveal: React.FC<{
 const CameraRig: React.FC<{
   phase: GamePhase;
   cardMode: CardMode;
+  cardPage: CardPage;
   impactRef: React.RefObject<ImpactSignal>;
-}> = ({ phase, cardMode, impactRef }) => {
+  toolbarHeightPx: number;
+}> = ({ phase, cardMode, cardPage, impactRef, toolbarHeightPx }) => {
   const { size } = useThree();
   const target = React.useMemo(() => new THREE.Vector3(), []);
   const look = React.useMemo(() => new THREE.Vector3(), []);
@@ -170,7 +176,8 @@ const CameraRig: React.FC<{
     // Chế độ ĐỌC THIỆP: camera đưa thẳng góc về tấm thiệp, khoảng cách
     // được tính để toàn bộ thiệp luôn nằm trong khung hình (mọi tỉ lệ màn hình)
     if (phase === 'letter_reading' && cardMode === 'expanded') {
-      const view = getCardReadCamera(aspect);
+      const insets = getReadInsets(size.height, toolbarHeightPx);
+      const view = getCardReadCamera(aspect, CAMERA_FOV_DEG, insets, cardPage);
       target.set(view.position[0], view.position[1], view.position[2]);
       look.set(view.lookAt[0], view.lookAt[1], view.lookAt[2]);
       smoothing = 0.075;
@@ -216,14 +223,17 @@ export const SceneContainer: React.FC<SceneContainerProps> = ({
   onBoxOpened,
   isCardOpen = false,
   cardMode = 'compact',
+  cardPage = 'letter',
   onToggleCard,
   skipToken = 0,
   replayToken = 0,
   reducedMotion = false,
+  toolbarHeightPx = 0,
 }) => {
-  const showCharacter =
-    (phase === 'reward_stage' || phase === 'secret_reveal' || phase === 'letter_reading') &&
-    wonItem !== null;
+  // Nhân vật 3D chỉ đứng trong scene ở sân khấu phần thưởng. Khi mở thiệp,
+  // hình của nhân vật đã được in (dạng 2D) vào trang thư nên không dựng lại
+  // model nữa — tránh hai nhân vật trùng nhau và giữ thiệp là tâm điểm.
+  const showCharacter = wonItem !== null && shouldShowCharacterInScene(phase);
   const showFireworks =
     phase === 'secret_reveal' || (wonItem?.rarity === 'secret' && phase === 'reward_stage');
   const showCard = phase === 'letter_reading' && cardData !== null;
@@ -256,7 +266,7 @@ export const SceneContainer: React.FC<SceneContainerProps> = ({
           gl.toneMappingExposure = 1.12;
         }}
       >
-        <CameraRig phase={phase} cardMode={cardMode} impactRef={impactRef} />
+        <CameraRig phase={phase} cardMode={cardMode} cardPage={cardPage} impactRef={impactRef} toolbarHeightPx={toolbarHeightPx} />
 
         {/* Sương mù tạo chiều sâu cho khu vườn */}
         <fog attach="fog" args={['#FFE7F0', 11, 27]} />
@@ -332,6 +342,7 @@ export const SceneContainer: React.FC<SceneContainerProps> = ({
             reducedMotion={reducedMotion}
             skipToken={skipToken}
             replayToken={replayToken}
+            toolbarHeightPx={toolbarHeightPx}
           />
         )}
       </Canvas>

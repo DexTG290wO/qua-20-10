@@ -80,8 +80,10 @@ export function buildCardData(params: {
   result: RecipientMatchResult | null;
   reward: ItemReward | null;
   content: PlayContent;
+  /** Ảnh 2D chụp từ model 3D của nhân vật trúng thưởng (in vào trang thư). */
+  companionImageUrl?: string;
 }): CardTextData | null {
-  const { result, reward, content } = params;
+  const { result, reward, content, companionImageUrl } = params;
   if (!result || !reward) return null;
 
   const letter = result.profile.letter || DEFAULT_FALLBACK_LETTER;
@@ -107,5 +109,6 @@ export function buildCardData(params: {
     themeColor: reward.themeColor,
     accentColor: reward.accentColor,
     portraitUrl: resolveAssetUrl(result.profile.portraitUrl),
+    companionImageUrl,
   };
 }

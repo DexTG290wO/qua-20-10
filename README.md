@@ -194,6 +194,7 @@ Trang này có:
 | Vị trí/khoảng cách camera cho thiệp | `src/utils/layout.ts` |
 | Nơ & ruy băng hộp quà | `src/components/3d/GiftBow.tsx` |
 | Mô hình nhân vật 3D | `src/components/3d/characters/*` |
+| Ảnh 2D của nhân vật in vào thiệp | `src/components/3d/CharacterSnapshot.tsx` |
 | Khu vườn hoa 3D | `src/components/3d/FlowerGarden3D.tsx` |
 | Hình học cánh hoa / sao / cỏ dùng chung | `src/components/3d/ProceduralFlora.ts` |
 | Hộp quà & timeline mở nắp | `src/components/3d/GiftBox3D.tsx` |
@@ -261,8 +262,27 @@ khi vòng quay bắt đầu, nên kết quả hiển thị luôn khớp với k�
 - **Trên điện thoại** (`src/utils/layout.ts` → `getCardReadLayout`): chỉ hiển thị
   **một trang thư** cho chữ to, camera canh đúng tâm trang (không lệch sang phải),
   bìa gấp hẳn ra sau, và phần dưới màn hình được chừa sẵn chỗ cho thanh công cụ
-  (`CARD_READ_INSETS`) nên nút bấm không bao giờ che chữ. Trên màn rộng thì vẫn
-  xem cả hai trang như một tấm thiệp mở.
+  nên nút bấm không bao giờ che chữ. Trên màn rộng thì vẫn xem cả hai trang như
+  một tấm thiệp mở.
+  - Khung 3D cao đúng vùng **nhìn thấy được** (`#root` dùng `100dvh`, không phải
+    `100vh`) — trên Chrome Android thanh địa chỉ làm `100vh` cao hơn màn hình thật
+    nên trước đây phần dưới thiệp bị che.
+  - `GreetingCardOverlay` **đo chiều cao thật** của hàng nút rồi truyền vào
+    `getReadInsets()`; hàng nút xuống 2–3 hàng trên máy nhỏ vẫn được chừa đủ chỗ
+    (tối thiểu bằng mức mặc định `CARD_READ_INSETS` nên màn rộng không đổi).
+- **Nhân vật in vào thiệp dạng ảnh 2D.** Khi mở thiệp, nhân vật 3D **không
+  còn đứng cạnh thiệp** nữa (`shouldShowCharacterInScene()`), thay vào đó hình
+  của nó được **chụp sẵn thành ảnh** rồi in vào cuối trang thư.
+  - `src/components/3d/CharacterSnapshot.tsx` dựng model trong một Canvas phụ
+    (ngoài màn hình, nền trong suốt, `preserveDrawingBuffer`), tự đo bao lồi
+    để canh camera vừa khung rồi `toDataURL()`. Chụp xong component tự gỡ.
+  - `drawLetterPicture()` trong `src/utils/cardRenderer.ts` vẽ ảnh vào khung
+    vàng ở cuối trang thư, kèm tên nhân vật. Khối ảnh có **chiều cao cố định**
+    (`LETTER_PICTURE` = 320×300) nên chữ tự thu nhỏ để nhường chỗ, và ảnh luôn
+    giữ đúng tỉ lệ (`fitContain`, không cắt).
+  - Khối ảnh **luôn nằm trong bố cục** ngay cả khi ảnh chưa chụp xong, nên chữ
+    không bị nhảy khi ảnh tới; nếu chụp lỗi thì vẽ huy hiệu hoa dự phòng.
+  - Ảnh cũng xuất theo khi bấm "Lưu thiệp" (`renderCardPng`).
 - **Ánh sáng & bóng đổ.** Đèn viền phía sau giúp nhân vật/hộp quà tách khỏi nền,
   bóng đổ dùng gradient mềm (`SoftShadow`) thay cho vòng cứng, nhân vật có nhịp
   "thở" nhẹ sau khi xuất hiện.
@@ -289,7 +309,7 @@ khi vòng quay bắt đầu, nên kết quả hiển thị luôn khớp với k�
 
 ## Kiểm thử tự động
 
-`npm test` chạy `test-runner.ts` (156 bài kiểm tra), bao gồm:
+`npm test` chạy `test-runner.ts` (172 bài kiểm tra), bao gồm:
 
 - Nhận diện alias Wang Yi + người nhận thường (có/không dấu, khoảng trắng thừa).
 - Tách tên hiển thị (2 từ cuối), giữ nguyên dấu tiếng Việt.
@@ -299,6 +319,10 @@ khi vòng quay bắt đầu, nên kết quả hiển thị luôn khớp với k�
 - Ghép nội dung một lượt chơi: họ tên → tên hiển thị → thiệp (dùng đúng hàm mà App dùng).
 - Bố cục thiệp: hình chiếu thiệp nằm gọn trong khung ở 11 tỉ lệ màn hình khác nhau
   (0.45 → 2.4), ở cả chế độ thu gọn và mở rộng.
+- Thanh công cụ thật trên điện thoại: phần chừa phía dưới khớp số đo px (hàng nút
+  xuống nhiều hàng vẫn không che thiệp), màn rộng giữ nguyên bố cục cũ.
+- Ảnh nhân vật trên thiệp: nhân vật 3D không còn dựng trong scene khi đọc thiệp,
+  ảnh 2D nằm gọn trong khung và giữ đúng tỉ lệ, khối ảnh không chiếm hết trang.
 - Ruy băng/nơ: kích thước dải, vị trí vệt sáng, độ dày, hình học đuôi nơ hợp lệ.
 - Phần thưởng: tỷ lệ cộng đúng 100%, chỉ Wang Yi có Secret cao nhất, giữ nguyên
   tỷ lệ các hồ sơ khác, và không bị ảnh hưởng bởi việc chọn lời chúc.

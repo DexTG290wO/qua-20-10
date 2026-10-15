@@ -14,6 +14,16 @@ html, body, #root {
   overflow: hidden;
 }
 
+/*
+ * Trên điện thoại (Chrome Android / Safari iOS), 100vh cao hơn vùng nhìn thấy
+ * vì còn thanh địa chỉ — dùng 100dvh để khung 3D khớp đúng màn hình thật,
+ * tránh việc thiệp bị thanh trình duyệt che mất. `height: 100%` ở trên là
+ * phương án dự phòng cho trình duyệt cũ.
+ */
+#root {
+  height: 100dvh;
+}
+
 /* Custom Animation Keyframes */
 @keyframes fadeIn {
   from { opacity: 0; }

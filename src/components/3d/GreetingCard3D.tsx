@@ -4,10 +4,13 @@ import * as THREE from 'three';
 import gsap from 'gsap';
 import { audioEngine } from '../../utils/audioEngine';
 import {
+  CAMERA_FOV_DEG,
   CARD_COMPACT_DEFAULT,
   CARD_EXPANDED_VIEW,
   getCardReadLayout,
   getCompactCardView,
+  getReadInsets,
+  type CardPage,
 } from '../../utils/layout';
 import {
   CARD_PAGE_HEIGHT,
@@ -36,12 +39,70 @@ interface GreetingCard3DProps {
   skipToken?: number;
   /** Tăng giá trị này để chạy lại hiệu ứng gõ chữ. */
   replayToken?: number;
+  /** Chiều cao thật của thanh công cụ (px) để chừa chỗ chính xác trên điện thoại. */
+  toolbarHeightPx?: number;
 }
 
 const CARD_W = 1.42;
 const CARD_H = 1.96;
 const CARD_T = 0.045;
+const CARD_CORNER_R = 0.052; // bán kính bo góc của tấm thiệp
 const STAND_Y = -1.22;
+
+/**
+ * Tấm thiệp có độ dày thật + bốn góc bo mềm (ExtrudeGeometry của
+ * hình chữ nhật bo góc). Nhờ vậy thiệp trông như một vật thể giấy
+ * thật thay vì một mặt phẳng dán vào scene.
+ */
+function createRoundedPanelGeometry(w: number, h: number, t: number, r: number): THREE.ExtrudeGeometry {
+  const shape = new THREE.Shape();
+  const x = -w / 2;
+  const y = -h / 2;
+  shape.moveTo(x + r, y);
+  shape.lineTo(x + w - r, y);
+  shape.quadraticCurveTo(x + w, y, x + w, y + r);
+  shape.lineTo(x + w, y + h - r);
+  shape.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  shape.lineTo(x + r, y + h);
+  shape.quadraticCurveTo(x, y + h, x, y + h - r);
+  shape.lineTo(x, y + r);
+  shape.quadraticCurveTo(x, y, x + r, y);
+  shape.closePath();
+
+  const geometry = new THREE.ExtrudeGeometry(shape, {
+    depth: t,
+    bevelEnabled: false,
+    curveSegments: 10,
+  });
+  geometry.translate(0, 0, -t / 2);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+/** Texture bóng mềm phía sau thiệp (một blob gradient dùng lại cho mọi lần vẽ). */
+let cachedCardShadowTexture: THREE.CanvasTexture | null = null;
+function getCardShadowTexture(): THREE.CanvasTexture | null {
+  if (cachedCardShadowTexture) return cachedCardShadowTexture;
+  if (typeof document === 'undefined') return null;
+  const size = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  g.addColorStop(0, 'rgba(84, 32, 50, 0.6)');
+  g.addColorStop(0.5, 'rgba(84, 32, 50, 0.3)');
+  g.addColorStop(0.78, 'rgba(84, 32, 50, 0.1)');
+  g.addColorStop(1, 'rgba(84, 32, 50, 0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  cachedCardShadowTexture = tex;
+  return tex;
+}
 
 /** Bông hoa 3D nhỏ gắn nổi trên bìa thiệp (chỉ ở bốn góc). */
 const TinyFlower: React.FC<{
@@ -67,20 +128,65 @@ const TinyFlower: React.FC<{
   </group>
 );
 
-/** Cánh hoa / sao nhỏ bay quanh tấm thiệp (chỉ ở chế độ thu gọn). */
-const CardSparkles: React.FC<{ active: boolean }> = ({ active }) => {
+/**
+ * Bốn bông hoa nhỏ gắn nổi ở bốn góc bìa thiệp, khẽ đung đưa.
+ * Chuyển động rất nhẹ để không làm phiền khi đọc.
+ */
+const CornerFlowers: React.FC<{ reducedMotion?: boolean }> = ({ reducedMotion = false }) => {
+  const ref = useRef<THREE.Group>(null);
+  const flowers = useMemo(
+    () => [
+      { position: [-CARD_W / 2 + 0.13, CARD_H / 2 - 0.15, CARD_T / 2 + 0.03] as [number, number, number], scale: 1.4, petal: '#FFFFFF' },
+      { position: [CARD_W / 2 - 0.13, CARD_H / 2 - 0.15, CARD_T / 2 + 0.03] as [number, number, number], scale: 1.2, petal: '#F9C4D2' },
+      { position: [-CARD_W / 2 + 0.13, -CARD_H / 2 + 0.15, CARD_T / 2 + 0.03] as [number, number, number], scale: 1.2, petal: '#F9C4D2' },
+      { position: [CARD_W / 2 - 0.13, -CARD_H / 2 + 0.15, CARD_T / 2 + 0.03] as [number, number, number], scale: 1.4, petal: '#FFFFFF' },
+    ],
+    []
+  );
+
+  useFrame((state) => {
+    const g = ref.current;
+    if (!g || reducedMotion) return;
+    const t = state.clock.getElapsedTime();
+    g.children.forEach((child, i) => {
+      const base = (child.userData.baseScale as number) ?? 1;
+      child.rotation.z = Math.sin(t * 0.9 + i * 1.6) * 0.08;
+      child.scale.setScalar(base * (1 + Math.sin(t * 1.5 + i * 1.1) * 0.035));
+    });
+  });
+
+  return (
+    <group ref={ref}>
+      {flowers.map((f, i) => (
+        <group key={i} position={f.position} scale={f.scale} userData={{ baseScale: f.scale }}>
+          <TinyFlower position={[0, 0, 0]} scale={1} petal={f.petal} />
+        </group>
+      ))}
+    </group>
+  );
+};
+
+/**
+ * Cánh hoa / sao nhỏ bay quanh tấm thiệp.
+ * Khi mở rộng để đọc, số lượng và độ sáng đều giảm để chữ luôn là tâm điểm.
+ */
+const CardSparkles: React.FC<{ active: boolean; count?: number; opacity?: number }> = ({
+  active,
+  count = 16,
+  opacity = 0.9,
+}) => {
   const groupRef = useRef<THREE.Group>(null);
   const items = useMemo(
     () =>
-      Array.from({ length: 16 }).map((_, i) => ({
-        angle: (i / 16) * Math.PI * 2,
+      Array.from({ length: count }).map((_, i) => ({
+        angle: (i / count) * Math.PI * 2,
         radius: 1.25 + Math.random() * 0.5,
         height: (Math.random() - 0.5) * 2.0,
         speed: 0.25 + Math.random() * 0.45,
         size: 0.5 + Math.random() * 0.9,
         color: ['#FFC1CC', '#FFF0F5', '#FFE082', '#FFFFFF', '#FFAAA6'][i % 5],
       })),
-    []
+    [count]
   );
 
   useFrame((state) => {
@@ -114,7 +220,7 @@ const CardSparkles: React.FC<{ active: boolean }> = ({ active }) => {
             emissive={it.color}
             emissiveIntensity={0.5}
             transparent
-            opacity={0.9}
+            opacity={opacity}
             roughness={0.3}
           />
         </mesh>
@@ -131,6 +237,7 @@ export const GreetingCard3D: React.FC<GreetingCard3DProps> = ({
   reducedMotion = false,
   skipToken = 0,
   replayToken = 0,
+  toolbarHeightPx = 0,
 }) => {
   const rootRef = useRef<THREE.Group>(null);
   const floatRef = useRef<THREE.Group>(null);
@@ -142,13 +249,24 @@ export const GreetingCard3D: React.FC<GreetingCard3DProps> = ({
   const aspect = size.width / Math.max(1, size.height);
   const targetView = mode === 'expanded' ? CARD_EXPANDED_VIEW : getCompactCardView(aspect);
 
-  // Màn hình hẹp: chỉ đọc trang thư nên bìa gấp hẳn ra sau cho gọn khung hình
-  const readLayout = useMemo(() => getCardReadLayout(aspect), [aspect]);
+  // Màn hình hẹp: chỉ đọc trang thư nên bìa gấp hẳn ra sau cho gọn khung hình.
+  // Chiều cao thanh công cụ đo được (px) quyết định phần chừa phía dưới, nên
+  // trang thư không bao giờ bị hàng nút che trên điện thoại.
+  const readInsets = useMemo(
+    () => getReadInsets(size.height, toolbarHeightPx),
+    [size.height, toolbarHeightPx]
+  );
+  const readLayout = useMemo(
+    () => getCardReadLayout(aspect, CAMERA_FOV_DEG, readInsets),
+    [aspect, readInsets]
+  );
   const hingeAngle = readLayout.coverOpenAngle;
 
   const pageCanvas = useRef<HTMLCanvasElement | null>(null);
   const companionCanvas = useRef<HTMLCanvasElement | null>(null);
   const coverCanvas = useRef<HTMLCanvasElement | null>(null);
+  // Ảnh 2D của nhân vật (chụp từ model 3D) — nạp bất đồng bộ rồi vẽ lại trang thư
+  const letterPictureRef = useRef<HTMLImageElement | null>(null);
 
   const [textures, setTextures] = useState<{
     page: THREE.CanvasTexture;
@@ -200,10 +318,11 @@ export const GreetingCard3D: React.FC<GreetingCard3DProps> = ({
     const coverCtx = cover.getContext('2d');
     if (compCtx) drawCompanionPage(compCtx, data);
     if (coverCtx) drawCoverPanel(coverCtx, data);
-    if (ctx) drawLetterPage(ctx, data, 0);
+    if (ctx) drawLetterPage(ctx, data, 0, null);
 
     let cancelled = false;
     let portraitImg: HTMLImageElement | null = null;
+    letterPictureRef.current = null;
     const redrawCompanion = () => {
       if (cancelled || !compCtx) return;
       drawCompanionPage(compCtx, data, '#FDF1F4', portraitImg);
@@ -217,9 +336,21 @@ export const GreetingCard3D: React.FC<GreetingCard3DProps> = ({
       });
     }
 
+    // Ảnh nhân vật trên trang thư: vẽ lại ngay khi ảnh nạp xong
+    if (data.companionImageUrl) {
+      loadImage(data.companionImageUrl).then((img) => {
+        if (cancelled || !img) return;
+        letterPictureRef.current = img;
+        if (ctx) {
+          drawLetterPage(ctx, data, revealRef.current, img);
+          pageTex.needsUpdate = true;
+        }
+      });
+    }
+
     whenFontsReady().then(() => {
       if (cancelled) return;
-      if (ctx) drawLetterPage(ctx, data, revealRef.current);
+      if (ctx) drawLetterPage(ctx, data, revealRef.current, letterPictureRef.current);
       redrawCompanion();
       if (coverCtx) drawCoverPanel(coverCtx, data);
       pageTex.needsUpdate = true;
@@ -307,7 +438,7 @@ export const GreetingCard3D: React.FC<GreetingCard3DProps> = ({
 
       const ctx = pageCanvas.current?.getContext('2d');
       if (ctx) {
-        drawLetterPage(ctx, data, next);
+        drawLetterPage(ctx, data, next, letterPictureRef.current);
         if (textures) textures.page.needsUpdate = true;
       }
       if (next >= totalChars) window.clearInterval(id);
@@ -321,7 +452,7 @@ export const GreetingCard3D: React.FC<GreetingCard3DProps> = ({
     revealRef.current = chars;
     const ctx = pageCanvas.current?.getContext('2d');
     if (!ctx) return;
-    drawLetterPage(ctx, data, chars);
+    drawLetterPage(ctx, data, chars, letterPictureRef.current);
     if (textures) textures.page.needsUpdate = true;
   };
 
@@ -335,15 +466,24 @@ export const GreetingCard3D: React.FC<GreetingCard3DProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [replayToken]);
 
-  // ── Nhấp nhẹ khi ở chế độ thu gọn (tắt khi mở rộng để dễ đọc) ──
+  // ── Nhấp nhẹ khi rảnh (rất nhỏ khi mở rộng để không ảnh hưởng việc đọc) ──
   useFrame((state) => {
-    if (mode === 'expanded' || reducedMotion) return;
+    if (reducedMotion) return;
     const t = state.clock.getElapsedTime();
     if (floatRef.current) {
-      floatRef.current.position.y = Math.sin(t * 1.25) * 0.02;
-      floatRef.current.rotation.z = Math.sin(t * 0.9) * 0.006;
+      const expanded = mode === 'expanded';
+      floatRef.current.position.y = Math.sin(t * 1.25) * (expanded ? 0.008 : 0.02);
+      floatRef.current.rotation.z = Math.sin(t * 0.9) * (expanded ? 0.002 : 0.006);
     }
   });
+
+  const panelGeometry = useMemo(
+    () => createRoundedPanelGeometry(CARD_W, CARD_H, CARD_T, CARD_CORNER_R),
+    []
+  );
+  useEffect(() => () => panelGeometry.dispose(), [panelGeometry]);
+
+  const cardShadowTexture = useMemo(() => getCardShadowTexture(), []);
 
   const paperMat = useMemo(
     () =>
@@ -394,13 +534,11 @@ export const GreetingCard3D: React.FC<GreetingCard3DProps> = ({
       <group ref={floatRef} onClick={onToggleOpen}>
         {/* ── TRANG THƯ (bên phải) ── */}
         <group position={[CARD_W / 2, 0, 0]}>
-          <mesh castShadow receiveShadow material={paperMat}>
-            <boxGeometry args={[CARD_W, CARD_H, CARD_T]} />
-          </mesh>
-          {/* Viền vàng mảnh, nhô nhẹ khỏi mặt giấy */}
+          <mesh geometry={panelGeometry} castShadow receiveShadow material={paperMat} />
+          {/* Viền vàng mảnh, nhô nhẹ khỏi mặt giấy (không còn khung đôi dày) */}
           <mesh position={[0, 0, CARD_T / 2 + 0.004]}>
-            <boxGeometry args={[CARD_W - 0.06, CARD_H - 0.06, 0.005]} />
-            <meshStandardMaterial color="#DDBA72" metalness={0.4} roughness={0.4} />
+            <boxGeometry args={[CARD_W - 0.078, CARD_H - 0.078, 0.005]} />
+            <meshStandardMaterial color="#DFC07C" metalness={0.35} roughness={0.45} />
           </mesh>
           {/* Mặt chữ: vật liệu không nhận sáng để chữ không bao giờ bị cháy sáng */}
           {textures && (
@@ -414,9 +552,7 @@ export const GreetingCard3D: React.FC<GreetingCard3DProps> = ({
         {/* ── BÌA (xoay quanh gáy thật) ── */}
         <group ref={coverPivotRef}>
           <group position={[CARD_W / 2, 0, 0]}>
-            <mesh castShadow receiveShadow material={coverMat}>
-              <boxGeometry args={[CARD_W, CARD_H, CARD_T]} />
-            </mesh>
+            <mesh geometry={panelGeometry} castShadow receiveShadow material={coverMat} />
 
             {/* Mặt bìa ngoài */}
             {textures && (
@@ -438,11 +574,8 @@ export const GreetingCard3D: React.FC<GreetingCard3DProps> = ({
               </mesh>
             )}
 
-            {/* Hoa nổi — chỉ ở bốn góc bìa */}
-            <TinyFlower position={[-CARD_W / 2 + 0.13, CARD_H / 2 - 0.15, CARD_T / 2 + 0.03]} scale={1.4} petal="#FFFFFF" />
-            <TinyFlower position={[CARD_W / 2 - 0.13, CARD_H / 2 - 0.15, CARD_T / 2 + 0.03]} scale={1.2} petal="#F9C4D2" />
-            <TinyFlower position={[-CARD_W / 2 + 0.13, -CARD_H / 2 + 0.15, CARD_T / 2 + 0.03]} scale={1.2} petal="#F9C4D2" />
-            <TinyFlower position={[CARD_W / 2 - 0.13, -CARD_H / 2 + 0.15, CARD_T / 2 + 0.03]} scale={1.4} petal="#FFFFFF" />
+            {/* Hoa nổi — chỉ ở bốn góc bìa, khẽ đung đưa */}
+            <CornerFlowers reducedMotion={reducedMotion} />
 
             {/* Con dấu sáp trên bìa */}
             <group position={[0, -CARD_H / 2 + 0.1, CARD_T / 2 + 0.02]} rotation={[Math.PI / 2, 0, 0]}>
@@ -454,18 +587,36 @@ export const GreetingCard3D: React.FC<GreetingCard3DProps> = ({
           </group>
         </group>
 
+        {/* Bóng mềm phía sau thiệp — tách thiệp khỏi nền vườn hoa */}
+        {cardShadowTexture && (
+          <mesh position={[CARD_W / 2, -0.05, -0.075]} scale={[1, 1, 1]}>
+            <planeGeometry args={[CARD_W * 1.5, CARD_H * 1.34]} />
+            <meshBasicMaterial
+              map={cardShadowTexture}
+              transparent
+              opacity={mode === 'expanded' ? 0.3 : 0.24}
+              depthWrite={false}
+              toneMapped={false}
+            />
+          </mesh>
+        )}
+
         {/* Gáy vàng */}
         <mesh castShadow>
           <boxGeometry args={[0.035, CARD_H, CARD_T + 0.012]} />
           <meshStandardMaterial color="#D9A94F" metalness={0.5} roughness={0.35} />
         </mesh>
 
-        <CardSparkles active={mode === 'compact'} />
+        <CardSparkles
+          active
+          count={mode === 'expanded' ? 8 : 16}
+          opacity={mode === 'expanded' ? 0.45 : 0.9}
+        />
 
         {/* Ánh sáng phụ rất nhẹ — không chiếu lên mặt chữ (mặt chữ không nhận sáng) */}
         <pointLight
           position={[0, 0.5, 1.1]}
-          intensity={mode === 'expanded' ? 0.12 : 0.45}
+          intensity={mode === 'expanded' ? 0.16 : 0.45}
           color="#FFEFE4"
           distance={4}
           decay={1.6}
@@ -487,6 +638,11 @@ interface GreetingCardOverlayProps {
   isOpen: boolean;
   isExpanded: boolean;
   isExporting?: boolean;
+  /** Trang đang xem trên màn hình hẹp. */
+  page?: CardPage;
+  /** Chỉ hiện nút chuyển trang khi màn hình không đủ rộng cho cả hai trang. */
+  showPageToggle?: boolean;
+  onTogglePage?: () => void;
   onToggleOpen: () => void;
   onExpand: () => void;
   onCollapse: () => void;
@@ -494,6 +650,8 @@ interface GreetingCardOverlayProps {
   onReplay: () => void;
   onSkip: () => void;
   onRestart: () => void;
+  /** Báo chiều cao thật của thanh công cụ để thiệp 3D chừa đúng chỗ. */
+  onToolbarHeightChange?: (px: number) => void;
 }
 
 export const GreetingCardOverlay: React.FC<GreetingCardOverlayProps> = ({
@@ -503,6 +661,9 @@ export const GreetingCardOverlay: React.FC<GreetingCardOverlayProps> = ({
   isOpen,
   isExpanded,
   isExporting = false,
+  page = 'letter',
+  showPageToggle = false,
+  onTogglePage,
   onToggleOpen,
   onExpand,
   onCollapse,
@@ -510,13 +671,33 @@ export const GreetingCardOverlay: React.FC<GreetingCardOverlayProps> = ({
   onReplay,
   onSkip,
   onRestart,
+  onToolbarHeightChange,
 }) => {
   // Nút gọn hơn trên điện thoại để không che thiệp
   const btn =
     'px-2.5 py-1.5 sm:px-3 rounded-xl text-[11px] sm:text-xs font-semibold transition-all cursor-pointer active:scale-95 select-none whitespace-nowrap';
 
+  const barRef = useRef<HTMLDivElement>(null);
+
+  // Hàng nút có thể xuống 2–3 hàng trên điện thoại: đo chiều cao thật
+  // (kèm safe-area) để thiệp 3D luôn nằm phía trên thanh công cụ.
+  useEffect(() => {
+    const el = barRef.current;
+    if (!el || !onToolbarHeightChange) return;
+    const report = () => onToolbarHeightChange(el.getBoundingClientRect().height);
+    report();
+    const observer = new ResizeObserver(report);
+    observer.observe(el);
+    window.addEventListener('resize', report);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', report);
+    };
+  }, [onToolbarHeightChange, isExpanded, showPageToggle]);
+
   return (
     <div
+      ref={barRef}
       className="fixed inset-x-0 bottom-0 z-30 flex flex-col items-center gap-1.5 px-2 sm:gap-2 sm:p-3 pointer-events-none"
       style={{ paddingBottom: 'max(0.6rem, env(safe-area-inset-bottom))' }}
     >
@@ -537,6 +718,11 @@ export const GreetingCardOverlay: React.FC<GreetingCardOverlayProps> = ({
 
         {isExpanded && (
           <>
+            {showPageToggle && onTogglePage && (
+              <button onClick={onTogglePage} className={`${btn} bg-pink-100 hover:bg-pink-200 text-pink-700`}>
+                {page === 'portrait' ? 'Xem thư 💌' : 'Xem chân dung 🖼'}
+              </button>
+            )}
             <button onClick={onSkip} className={`${btn} bg-pink-100 hover:bg-pink-200 text-pink-700`}>
               <span className="sm:hidden">Toàn bộ</span>
               <span className="hidden sm:inline">Hiện toàn bộ</span>
@@ -583,7 +769,7 @@ export const GreetingCardOverlay: React.FC<GreetingCardOverlayProps> = ({
       {/* Gợi ý chỉ hiện trên màn hình đủ rộng để không che thiệp trên điện thoại */}
       <p className="pointer-events-none hidden sm:block text-[11px] font-medium text-rose-800/80 drop-shadow-sm text-center px-2">
         {isExpanded
-          ? `Đang đọc thiệp dành cho ${displayName} • bấm "Đóng" để quay lại`
+          ? `Đang đọc ${page === 'portrait' ? 'trang chân dung' : 'trang thư'} dành cho ${displayName} • bấm "Đóng" để quay lại`
           : `Món quà của ${displayName}: ${companionName} • bấm "Đọc thiệp" để xem rõ hơn`}
       </p>
     </div>

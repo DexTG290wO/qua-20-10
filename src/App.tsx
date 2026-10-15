@@ -12,10 +12,12 @@ import {
 } from './utils/giftPlay';
 import { audioEngine } from './utils/audioEngine';
 import { exportCardAsImage } from './utils/exportCard';
+import { isSpreadView, type CardPage } from './utils/layout';
 import type { CardTextData } from './utils/cardRenderer';
 
 // 3D Scene Components
 import { SceneContainer } from './components/3d/SceneContainer';
+import { CharacterSnapshot } from './components/3d/CharacterSnapshot';
 import { GreetingCardOverlay, type CardMode } from './components/3d/GreetingCard3D';
 
 // UI Components
@@ -32,6 +34,13 @@ export const App: React.FC = () => {
   const [wonItem, setWonItem] = useState<ItemReward | null>(null);
   const [isCardOpen, setIsCardOpen] = useState<boolean>(false);
   const [cardMode, setCardMode] = useState<CardMode>('compact');
+  // Trên màn hình hẹp chỉ xem được một trang: mặc định là trang thư,
+  // người dùng có thể chuyển sang trang chân dung (mặt thiệp chính).
+  const [cardPage, setCardPage] = useState<CardPage>('letter');
+  const [isNarrowScreen, setIsNarrowScreen] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return !isSpreadView(window.innerWidth / Math.max(1, window.innerHeight));
+  });
 
   // Nội dung (tên hiển thị + lời chúc) được CHỐT một lần cho mỗi lượt chơi
   const [playContent, setPlayContent] = useState<PlayContent>(EMPTY_PLAY_CONTENT);
@@ -44,6 +53,11 @@ export const App: React.FC = () => {
   const [replayToken, setReplayToken] = useState(0);
   const [isExporting, setIsExporting] = useState(false);
   const [runId, setRunId] = useState(0);
+  // Chiều cao thật của thanh công cụ thiệp (px) — để thiệp 3D chừa đúng chỗ
+  // trên điện thoại, nơi hàng nút có thể xuống nhiều hàng.
+  const [toolbarHeightPx, setToolbarHeightPx] = useState(0);
+  // Ảnh 2D của nhân vật trúng thưởng (chụp từ model 3D) để in vào trang thư.
+  const [companionImageUrl, setCompanionImageUrl] = useState<string | null>(null);
 
   // Tôn trọng thiết lập giảm chuyển động của hệ điều hành
   const [reducedMotion, setReducedMotion] = useState<boolean>(() => {
@@ -57,6 +71,20 @@ export const App: React.FC = () => {
     const onChange = () => setReducedMotion(mq.matches);
     mq.addEventListener('change', onChange);
     return () => mq.removeEventListener('change', onChange);
+  }, []);
+
+  // Theo dõi độ rộng màn hình để biết khi nào chỉ xem được MỘT trang thiệp
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const update = () =>
+      setIsNarrowScreen(!isSpreadView(window.innerWidth / Math.max(1, window.innerHeight)));
+    update();
+    window.addEventListener('resize', update);
+    window.addEventListener('orientationchange', update);
+    return () => {
+      window.removeEventListener('resize', update);
+      window.removeEventListener('orientationchange', update);
+    };
   }, []);
 
   // ── 1. Hộp quà đáp xuống vườn ──────────────────────────────
@@ -115,6 +143,7 @@ export const App: React.FC = () => {
   // thành khung đọc thẳng góc, chữ to rõ.
   const handleProceedToLetter = useCallback(() => {
     setCardMode('compact');
+    setCardPage('letter');
     setIsCardOpen(false);
     setPhase('letter_reading');
   }, []);
@@ -130,9 +159,11 @@ export const App: React.FC = () => {
   const handleRestart = useCallback(() => {
     setIsCardOpen(false);
     setCardMode('compact');
+    setCardPage('letter');
     setPlayContent(EMPTY_PLAY_CONTENT);
     setWonItem(null);
     setRecipientResult(null);
+    setCompanionImageUrl(null);
     setBoxClickCount(0);
     setSkipToken(0);
     setReplayToken(0);
@@ -160,8 +191,14 @@ export const App: React.FC = () => {
   const displayName = playContent.displayName || 'bạn';
 
   const cardData: CardTextData | null = useMemo(
-    () => buildCardData({ result: recipientResult, reward: wonItem, content: playContent }),
-    [recipientResult, wonItem, playContent]
+    () =>
+      buildCardData({
+        result: recipientResult,
+        reward: wonItem,
+        content: playContent,
+        companionImageUrl: companionImageUrl ?? undefined,
+      }),
+    [recipientResult, wonItem, playContent, companionImageUrl]
   );
 
   const handleExportCard = useCallback(async () => {
@@ -175,7 +212,7 @@ export const App: React.FC = () => {
   const rarityConfig = wonItem ? RARITY_CONFIGS[wonItem.rarity] : null;
 
   return (
-    <div className="relative w-screen h-screen overflow-hidden bg-gradient-to-b from-[#FFF6FA] via-[#FCE9F1] to-[#EFE3F7] select-none font-sans">
+    <div className="relative w-screen h-full overflow-hidden bg-gradient-to-b from-[#FFF6FA] via-[#FCE9F1] to-[#EFE3F7] select-none font-sans">
       {/* 3D WORLD */}
       <SceneContainer
         key={runId}
@@ -187,11 +224,21 @@ export const App: React.FC = () => {
         onBoxOpened={handleBoxOpened}
         isCardOpen={isCardOpen}
         cardMode={cardMode}
+        cardPage={cardPage}
         onToggleCard={handleCardClick}
         skipToken={skipToken}
         replayToken={replayToken}
         reducedMotion={reducedMotion}
+        toolbarHeightPx={toolbarHeightPx}
       />
+
+      {/* Chụp nhân vật thành ảnh 2D để in vào trang thư (chạy ẩn, tự gỡ sau khi chụp) */}
+      {wonItem && !companionImageUrl && (
+        <CharacterSnapshot
+          characterType={wonItem.characterType}
+          onCapture={setCompanionImageUrl}
+        />
+      )}
 
       {/* Chớp sáng chuyển cảnh */}
       {screenFlash && (
@@ -273,6 +320,11 @@ export const App: React.FC = () => {
           isOpen={isCardOpen}
           isExpanded={cardMode === 'expanded'}
           isExporting={isExporting}
+          page={cardPage}
+          showPageToggle={isNarrowScreen}
+          onTogglePage={() =>
+            setCardPage((current) => (current === 'letter' ? 'portrait' : 'letter'))
+          }
           onToggleOpen={() => setIsCardOpen((v) => !v)}
           onExpand={() => {
             setCardMode('expanded');
@@ -295,6 +347,7 @@ export const App: React.FC = () => {
             setSkipToken((n) => n + 1);
           }}
           onRestart={handleRestart}
+          onToolbarHeightChange={setToolbarHeightPx}
         />
       )}
     </div>

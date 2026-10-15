@@ -61,8 +61,21 @@ const ModelStage: React.FC<{
     let cancelled = false;
     const measure = () => {
       const g = boxRef.current;
+      const spin = spinRef.current;
       if (!g || cancelled) return;
+
+      // Tạm bỏ góc tự xoay để số đo rộng/cao không bị lệch theo góc quay
+      const savedRot = spin ? spin.rotation.y : 0;
+      if (spin) {
+        spin.rotation.y = 0;
+        spin.updateMatrixWorld(true);
+      }
       const box = new THREE.Box3().setFromObject(g);
+      if (spin) {
+        spin.rotation.y = savedRot;
+        spin.updateMatrixWorld(true);
+      }
+
       if (!Number.isFinite(box.min.y) || !Number.isFinite(box.max.y)) return;
       onMetrics({
         minY: box.min.y,
@@ -72,8 +85,8 @@ const ModelStage: React.FC<{
       });
     };
 
-    const first = window.setTimeout(measure, 150);
-    const second = window.setTimeout(measure, 600);
+    const first = window.setTimeout(measure, 200);
+    const second = window.setTimeout(measure, 900);
     return () => {
       cancelled = true;
       window.clearTimeout(first);

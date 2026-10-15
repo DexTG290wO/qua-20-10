@@ -24,7 +24,8 @@ export async function exportCardAsImage(
 ): Promise<boolean> {
   try {
     const portrait = data.portraitUrl ? await loadImage(data.portraitUrl) : null;
-    const dataUrl = renderCardPng(data, portrait);
+    const picture = data.companionImageUrl ? await loadImage(data.companionImageUrl) : null;
+    const dataUrl = renderCardPng(data, portrait, picture);
     if (!dataUrl) return false;
     downloadDataUrl(dataUrl, filename);
     return true;
